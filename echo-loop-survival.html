@@ -107,26 +107,27 @@
   // rendered at SPRITE_SIZE resolution with an automatic 1px
   // outline on any filled pixel touching an empty neighbor.
   // ============================================================
-  function buildSprite(maskFn, shadeFn) {
+  function buildSprite(maskFn, shadeFn, size) {
+    size = size || SPRITE_SIZE;
     const filled = [];
-    for (let y = 0; y < SPRITE_SIZE; y++) {
+    for (let y = 0; y < size; y++) {
       const row = [];
-      for (let x = 0; x < SPRITE_SIZE; x++) row.push(!!maskFn(x, y));
+      for (let x = 0; x < size; x++) row.push(!!maskFn(x, y));
       filled.push(row);
     }
     const spriteCanvas = document.createElement('canvas');
-    spriteCanvas.width = SPRITE_SIZE;
-    spriteCanvas.height = SPRITE_SIZE;
+    spriteCanvas.width = size;
+    spriteCanvas.height = size;
     const sctx = spriteCanvas.getContext('2d');
-    const img = sctx.createImageData(SPRITE_SIZE, SPRITE_SIZE);
-    for (let y = 0; y < SPRITE_SIZE; y++) {
-      for (let x = 0; x < SPRITE_SIZE; x++) {
-        const idx = (y * SPRITE_SIZE + x) * 4;
+    const img = sctx.createImageData(size, size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const idx = (y * size + x) * 4;
         if (!filled[y][x]) { img.data[idx + 3] = 0; continue; }
         let edge = false;
         const neigh = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]];
         for (const [nx, ny] of neigh) {
-          if (nx < 0 || nx >= SPRITE_SIZE || ny < 0 || ny >= SPRITE_SIZE || !filled[ny][nx]) { edge = true; break; }
+          if (nx < 0 || nx >= size || ny < 0 || ny >= size || !filled[ny][nx]) { edge = true; break; }
         }
         const color = edge ? [14, 14, 18, 255] : shadeFn(x, y);
         img.data[idx] = color[0]; img.data[idx + 1] = color[1]; img.data[idx + 2] = color[2]; img.data[idx + 3] = color[3] ?? 255;
@@ -222,12 +223,48 @@
     return mulColor([160, 45, 45], factor);
   }
 
+  // --- Coin (gold pickup) ---
+  function coinMask(x, y) {
+    const dx = x - 7, dy = y - 7;
+    return dx * dx + dy * dy <= 36;
+  }
+  function coinShade(x, y) {
+    const dx = x - 7, dy = y - 7;
+    // ring rim + bright inner face, lit from upper-left
+    const rim = dx * dx + dy * dy >= 22;
+    const factor = 0.85 - dy * 0.05 - dx * 0.03;
+    return rim ? mulColor([170, 130, 30], factor) : mulColor([250, 205, 70], factor);
+  }
+
   const SPRITES = {
     player: buildSprite(playerMask, playerShade),
     slime: buildSprite(slimeMask, slimeShade),
     bat: buildSprite(batMask, batShade),
     brute: buildSprite(bruteMask, bruteShade),
+    coin: buildSprite(coinMask, coinShade),
   };
+
+  // --- Title-screen logo: a larger, more detailed hooded echo/ghost ---
+  const TITLE_SPRITE_SIZE = 32;
+  function titleMask(x, y) {
+    const dx = x - 16, dy = y - 14;
+    if (dy <= 0 && (dx * dx) / (10 * 10) + (dy * dy) / (9 * 9) <= 1) return true; // hood
+    if (dy >= 0 && dy <= 15) {
+      const t = dy / 15;
+      const hw = 6 + t * 8;
+      if (Math.abs(dx) > hw) return false;
+      if (dy > 13.5 + Math.sin((dx + 16) * 0.9) * 1.5) return false; // ragged hem
+      return true;
+    }
+    return false;
+  }
+  function titleShade(x, y) {
+    const dx = x - 16, dy = y - 14;
+    if (dy >= -3 && dy <= -1 && (Math.abs(dx - 3) <= 1 || Math.abs(dx + 3) <= 1)) return [255, 205, 90, 255]; // glowing eyes
+    const l = Math.max(0.35, Math.min(1.15, 0.62 - dy * 0.015 - Math.abs(dx) * 0.012));
+    return mulColor([96, 82, 128], l);
+  }
+  const TITLE_SPRITE = buildSprite(titleMask, titleShade, TITLE_SPRITE_SIZE);
 
   const ALIVE_SPRITE = tintSprite(SPRITES.player, 0.56, 0.55);
 
@@ -250,6 +287,71 @@
   }
 
   // ============================================================
+  // PERSISTENT SAVE — gold + upgrades carry across every run/reset.
+  // Gold, once earned, is never removed except by spending it; a
+  // respec only reallocates spent gold back to the pool, it never
+  // deletes lifetime earnings.
+  // ============================================================
+  const SAVE_KEY = 'echoLoopSave';
+  const UPGRADES = [
+    { id: 'attack', name: 'Sharpened Instincts', desc: '+1 starting attack damage', maxLevel: 5, baseCost: 10, costGrowth: 1.6 },
+    { id: 'expGain', name: 'Quick Study', desc: '+5% experience gained', maxLevel: 5, baseCost: 12, costGrowth: 1.6 },
+    { id: 'speed', name: 'Light Feet', desc: '+3% movement speed', maxLevel: 5, baseCost: 10, costGrowth: 1.6 },
+    { id: 'maxHp', name: 'Vitality', desc: '+5 starting max HP', maxLevel: 5, baseCost: 14, costGrowth: 1.7 },
+  ];
+
+  function defaultUpgradeLevels() {
+    const o = {};
+    for (const u of UPGRADES) o[u.id] = 0;
+    return o;
+  }
+
+  function loadSave() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return { gold: parsed.gold || 0, upgrades: Object.assign(defaultUpgradeLevels(), parsed.upgrades || {}) };
+      }
+    } catch (e) { /* localStorage unavailable — fall back to in-memory save */ }
+    return { gold: 0, upgrades: defaultUpgradeLevels() };
+  }
+
+  function saveSave() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) { /* ignore */ }
+  }
+
+  let save = loadSave();
+
+  function upgradeCostAt(upgrade, level) {
+    return Math.round(upgrade.baseCost * Math.pow(upgrade.costGrowth, level));
+  }
+
+  function buyUpgrade(id) {
+    const upgrade = UPGRADES.find(u => u.id === id);
+    if (!upgrade) return false;
+    const level = save.upgrades[id] || 0;
+    if (level >= upgrade.maxLevel) return false;
+    const cost = upgradeCostAt(upgrade, level);
+    if (save.gold < cost) return false;
+    save.gold -= cost;
+    save.upgrades[id] = level + 1;
+    saveSave();
+    return true;
+  }
+
+  function respecUpgrades() {
+    let refund = 0;
+    for (const u of UPGRADES) {
+      const level = save.upgrades[u.id] || 0;
+      for (let i = 0; i < level; i++) refund += upgradeCostAt(u, i);
+      save.upgrades[u.id] = 0;
+    }
+    save.gold += refund;
+    saveSave();
+  }
+
+  // ============================================================
   // GAME STATE
   // ============================================================
   const ENEMY_STATS = {
@@ -260,16 +362,26 @@
 
   let elapsed = 0;          // global survival clock; never resets except full reset
   let lifeNumber = 1;
-  let player, enemies, ghosts, recording, toasts, keys, attackPressed;
+  let player, enemies, ghosts, recording, toasts, coins, keys, attackPressed;
+
+  // 'title' -> 'menu' -> ('upgrades' | 'playing')
+  let gameState = 'title';
+  let menuSelection = 0;
+  let upgradeSelection = 0;
+  let mouseX = -1, mouseY = -1;
 
   function freshPlayer() {
+    const atkLv = save.upgrades.attack || 0;
+    const spdLv = save.upgrades.speed || 0;
+    const hpLv = save.upgrades.maxHp || 0;
+    const maxHp = 30 + hpLv * 5;
     return {
       x: CANVAS_W / 2, y: CANVAS_H / 2,
       r: 9,
-      hp: 30, maxHp: 30,
+      hp: maxHp, maxHp,
       level: 1, xp: 0, xpNext: 9,
-      speed: 150,
-      dmg: 8, atkRange: 46, atkCooldown: 0.45,
+      speed: 150 * (1 + spdLv * 0.03),
+      dmg: 8 + atkLv, atkRange: 46, atkCooldown: 0.45,
       atkTimer: 0,
       attacking: false,
       invuln: 0,
@@ -284,6 +396,7 @@
     ghosts = [];
     recording = [];
     toasts = [];
+    coins = [];
     spawnTimer = 0;
     addToast('A new loop begins.');
   }
@@ -310,6 +423,7 @@
     recording = [];
     lifeNumber++;
     enemies = []; // fresh room for the new (weak) life; difficulty clock keeps climbing
+    coins = [];   // uncollected gold does not survive a death
     player = freshPlayer();
   }
 
@@ -355,19 +469,116 @@
   }
 
   // ============================================================
+  // MENUS — layout + hit-testing shared by mouse and keyboard nav
+  // ============================================================
+  function menuButtonsList() {
+    return [
+      { id: 'start', label: 'Start', x: CANVAS_W / 2 - 100, y: 250, w: 200, h: 50 },
+      { id: 'upgrades', label: 'Upgrades', x: CANVAS_W / 2 - 100, y: 316, w: 200, h: 50 },
+    ];
+  }
+
+  function upgradeRowsList() {
+    const rows = [];
+    let y = 96;
+    for (const u of UPGRADES) {
+      rows.push({ id: u.id, upgrade: u, x: 50, y, w: 600, h: 52, buyRect: { x: 560, y: y + 6, w: 90, h: 40 } });
+      y += 62;
+    }
+    return rows;
+  }
+
+  function upgradeBottomButtons() {
+    return {
+      back: { id: 'back', label: 'Back', x: 50, y: 420, w: 140, h: 42 },
+      respec: { id: 'respec', label: 'Respec', x: 510, y: 420, w: 140, h: 42 },
+    };
+  }
+
+  function pointInRect(px, py, r) {
+    return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+  }
+
+  function activateMenuButton(id) {
+    if (id === 'start') { resetGame(); gameState = 'playing'; }
+    else if (id === 'upgrades') { gameState = 'upgrades'; upgradeSelection = 0; }
+  }
+
+  function activateUpgradeAction(id) {
+    if (id === 'back') gameState = 'menu';
+    else if (id === 'respec') respecUpgrades();
+    else buyUpgrade(id);
+  }
+
+  // ============================================================
   // INPUT
   // ============================================================
   keys = new Set();
   attackPressed = false;
+
   window.addEventListener('keydown', (e) => {
     const k = e.key.toLowerCase();
+
+    if (gameState === 'title') {
+      if (k === 'enter') gameState = 'menu';
+      return;
+    }
+
+    if (gameState === 'menu') {
+      const btns = menuButtonsList();
+      if (k === 'arrowup' || k === 'w') menuSelection = (menuSelection - 1 + btns.length) % btns.length;
+      if (k === 'arrowdown' || k === 's') menuSelection = (menuSelection + 1) % btns.length;
+      if (k === 'enter') activateMenuButton(btns[menuSelection].id);
+      return;
+    }
+
+    if (gameState === 'upgrades') {
+      const items = [...upgradeRowsList().map(r => r.id), 'respec', 'back'];
+      if (k === 'arrowup' || k === 'w') upgradeSelection = (upgradeSelection - 1 + items.length) % items.length;
+      if (k === 'arrowdown' || k === 's') upgradeSelection = (upgradeSelection + 1) % items.length;
+      if (k === 'enter') activateUpgradeAction(items[upgradeSelection]);
+      if (k === 'escape') gameState = 'menu';
+      return;
+    }
+
+    // gameState === 'playing'
     if (['w', 'a', 's', 'd'].includes(k)) keys.add(k);
     if (k === 'j') attackPressed = true;
-    if (k === 'r') resetGame();
+    if (k === 'r') { keys.clear(); attackPressed = false; gameState = 'menu'; menuSelection = 0; }
   });
+
   window.addEventListener('keyup', (e) => {
     const k = e.key.toLowerCase();
     keys.delete(k);
+  });
+
+  function canvasPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (CANVAS_W / rect.width),
+      y: (e.clientY - rect.top) * (CANVAS_H / rect.height),
+    };
+  }
+
+  canvas.addEventListener('mousemove', (e) => {
+    const p = canvasPos(e);
+    mouseX = p.x; mouseY = p.y;
+  });
+
+  canvas.addEventListener('click', (e) => {
+    const p = canvasPos(e);
+    if (gameState === 'title') { gameState = 'menu'; return; }
+    if (gameState === 'menu') {
+      for (const b of menuButtonsList()) if (pointInRect(p.x, p.y, b)) activateMenuButton(b.id);
+      return;
+    }
+    if (gameState === 'upgrades') {
+      for (const r of upgradeRowsList()) if (pointInRect(p.x, p.y, r.buyRect)) activateUpgradeAction(r.id);
+      const bottom = upgradeBottomButtons();
+      if (pointInRect(p.x, p.y, bottom.back)) activateUpgradeAction('back');
+      if (pointInRect(p.x, p.y, bottom.respec)) activateUpgradeAction('respec');
+      return;
+    }
   });
 
   // ============================================================
@@ -386,17 +597,34 @@
     }
   }
 
+  const GOLD_DROP_CHANCE = 0.01;
+
   function killDeadEnemies(awardXpToPlayer) {
     for (let i = enemies.length - 1; i >= 0; i--) {
-      if (enemies[i].hp <= 0) {
-        if (awardXpToPlayer) gainXp(enemies[i].xp);
+      const e = enemies[i];
+      if (e.hp <= 0) {
+        if (awardXpToPlayer) gainXp(e.xp);
+        if (Math.random() < GOLD_DROP_CHANCE) coins.push({ x: e.x, y: e.y, r: 7 });
         enemies.splice(i, 1);
       }
     }
   }
 
+  function updateCoins(dt) {
+    for (let i = coins.length - 1; i >= 0; i--) {
+      const c = coins[i];
+      const d = Math.hypot(c.x - player.x, c.y - player.y);
+      if (d <= c.r + player.r) {
+        save.gold += 1;
+        saveSave();
+        coins.splice(i, 1);
+      }
+    }
+  }
+
   function gainXp(amount) {
-    player.xp += amount;
+    const expLv = save.upgrades.expGain || 0;
+    player.xp += amount * (1 + expLv * 0.05);
     while (player.xp >= player.xpNext) {
       player.xp -= player.xpNext;
       player.level++;
@@ -493,10 +721,12 @@
   }
 
   function update(dt) {
+    if (gameState !== 'playing') return;
     elapsed += dt;
     updatePlayer(dt);
     updateEnemies(dt);
     updateGhosts(dt);
+    updateCoins(dt);
     updateSpawning(dt);
     updateToasts(dt);
 
@@ -538,6 +768,11 @@
     ctx.fillRect(e.x - w / 2, e.y - size / 2 - 6, w, 3);
     ctx.fillStyle = '#c0453f';
     ctx.fillRect(e.x - w / 2, e.y - size / 2 - 6, w * Math.max(0, e.hp / e.maxHp), 3);
+  }
+
+  function drawCoin(c) {
+    const bob = Math.sin(elapsed * 4 + c.x) * 2;
+    drawSprite(SPRITES.coin, c.x, c.y + bob, 16);
   }
 
   function drawGhost(g) {
@@ -594,11 +829,16 @@
 
     drawBar(10, 40, 160, 6, player.xp / player.xpNext, '#d9b45c', 'rgba(0,0,0,0.5)');
 
+    drawSprite(SPRITES.coin, 22, 58, 16);
+    ctx.fillStyle = '#d9b45c';
+    ctx.font = '13px monospace';
+    ctx.fillText(`${save.gold}`, 34, 62);
+
     ctx.font = '11px monospace';
     ctx.fillStyle = 'rgba(230,230,236,0.7)';
-    ctx.fillText('WASD move  ·  J attack  ·  R reset', 10, CANVAS_H - 10);
+    ctx.fillText('WASD move  ·  J attack  ·  R menu', 10, CANVAS_H - 10);
 
-    let ty = 60;
+    let ty = 84;
     ctx.textAlign = 'center';
     for (const t of toasts) {
       ctx.globalAlpha = Math.min(1, t.timer);
@@ -611,12 +851,158 @@
     ctx.textAlign = 'left';
   }
 
-  function draw() {
+  function drawPlayScreen() {
     drawBackground();
     for (const g of ghosts) drawGhost(g);
+    for (const c of coins) drawCoin(c);
     for (const e of enemies) drawEnemy(e);
     drawPlayer();
     drawHud();
+  }
+
+  // ============================================================
+  // MENU SCREENS
+  // ============================================================
+  function drawButton(btn, hovered, selected) {
+    const active = hovered || selected;
+    ctx.fillStyle = active ? 'rgba(217,180,92,0.18)' : 'rgba(255,255,255,0.04)';
+    ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+    ctx.strokeStyle = active ? '#d9b45c' : '#4a4d5c';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(btn.x + 1, btn.y + 1, btn.w - 2, btn.h - 2);
+    ctx.fillStyle = active ? '#f5e2ae' : '#c8c8d0';
+    ctx.font = 'bold 16px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2 + 1);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawTitleScreen() {
+    ctx.fillStyle = '#0e0f14';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    drawSprite(TITLE_SPRITE, CANVAS_W / 2, 160, 128);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#d9b45c';
+    ctx.font = 'bold 36px "Courier New", monospace';
+    ctx.fillText('ECHO LOOP', CANVAS_W / 2, 270);
+
+    ctx.fillStyle = 'rgba(230,230,236,0.55)';
+    ctx.font = '13px monospace';
+    ctx.fillText('every death leaves an echo that fights on', CANVAS_W / 2, 296);
+
+    const blink = Math.floor(elapsed * 2) % 2 === 0;
+    if (blink) {
+      ctx.fillStyle = '#e8e8ec';
+      ctx.font = '16px monospace';
+      ctx.fillText('Press Enter', CANVAS_W / 2, 360);
+    }
+    ctx.textAlign = 'left';
+  }
+
+  function drawMenuScreen() {
+    ctx.fillStyle = '#0e0f14';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#d9b45c';
+    ctx.font = 'bold 28px "Courier New", monospace';
+    ctx.fillText('ECHO LOOP', CANVAS_W / 2, 150);
+
+    drawSprite(SPRITES.coin, CANVAS_W / 2 + 90, 145, 18);
+    ctx.fillStyle = '#d9b45c';
+    ctx.font = '14px monospace';
+    ctx.fillText(`${save.gold}`, CANVAS_W / 2 + 118, 150);
+    ctx.textAlign = 'left';
+
+    const btns = menuButtonsList();
+    btns.forEach((b, i) => {
+      const hovered = pointInRect(mouseX, mouseY, b);
+      drawButton(b, hovered, i === menuSelection);
+    });
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(230,230,236,0.5)';
+    ctx.font = '11px monospace';
+    ctx.fillText('Arrow keys / mouse · Enter to select', CANVAS_W / 2, 400);
+    ctx.textAlign = 'left';
+  }
+
+  function drawUpgradesScreen() {
+    ctx.fillStyle = '#0e0f14';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    ctx.fillStyle = '#d9b45c';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.fillText('UPGRADES', 50, 46);
+
+    drawSprite(SPRITES.coin, CANVAS_W - 110, 40, 18);
+    ctx.fillStyle = '#d9b45c';
+    ctx.font = '15px monospace';
+    ctx.fillText(`${save.gold}`, CANVAS_W - 90, 46);
+
+    const rows = upgradeRowsList();
+    rows.forEach((row, i) => {
+      const level = save.upgrades[row.upgrade.id] || 0;
+      const maxed = level >= row.upgrade.maxLevel;
+      const cost = maxed ? null : upgradeCostAt(row.upgrade, level);
+      const affordable = !maxed && save.gold >= cost;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx.fillRect(row.x, row.y, row.w, row.h);
+      ctx.strokeStyle = i === upgradeSelection ? '#d9b45c' : '#3a3d4a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(row.x + 1, row.y + 1, row.w - 2, row.h - 2);
+
+      ctx.fillStyle = '#e8e8ec';
+      ctx.font = 'bold 14px monospace';
+      ctx.fillText(row.upgrade.name, row.x + 14, row.y + 20);
+      ctx.fillStyle = 'rgba(230,230,236,0.65)';
+      ctx.font = '11px monospace';
+      ctx.fillText(row.upgrade.desc, row.x + 14, row.y + 38);
+
+      ctx.fillStyle = '#d9b45c';
+      ctx.font = '11px monospace';
+      ctx.fillText(`Lv ${level}/${row.upgrade.maxLevel}`, row.x + 380, row.y + 20);
+
+      const hovered = pointInRect(mouseX, mouseY, row.buyRect);
+      const buyBtn = {
+        x: row.buyRect.x, y: row.buyRect.y, w: row.buyRect.w, h: row.buyRect.h,
+        label: maxed ? 'MAX' : `${cost}g`,
+      };
+      const dimmed = !maxed && !affordable;
+      ctx.fillStyle = maxed ? 'rgba(217,180,92,0.12)' : (hovered && affordable ? 'rgba(217,180,92,0.22)' : 'rgba(255,255,255,0.05)');
+      ctx.fillRect(buyBtn.x, buyBtn.y, buyBtn.w, buyBtn.h);
+      ctx.strokeStyle = maxed ? '#8a7a4a' : (dimmed ? '#4a4d5c' : '#d9b45c');
+      ctx.strokeRect(buyBtn.x + 1, buyBtn.y + 1, buyBtn.w - 2, buyBtn.h - 2);
+      ctx.fillStyle = maxed ? '#8a7a4a' : (dimmed ? '#6a6a72' : '#f5e2ae');
+      ctx.font = 'bold 13px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(buyBtn.label, buyBtn.x + buyBtn.w / 2, buyBtn.y + buyBtn.h / 2 + 1);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+    });
+
+    const bottom = upgradeBottomButtons();
+    drawButton(bottom.back, pointInRect(mouseX, mouseY, bottom.back), upgradeSelection === UPGRADES.length + 1);
+    drawButton(bottom.respec, pointInRect(mouseX, mouseY, bottom.respec), upgradeSelection === UPGRADES.length);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(230,230,236,0.5)';
+    ctx.font = '10px monospace';
+    ctx.fillText('Respec refunds all spent gold so you can reallocate it', CANVAS_W / 2, 476);
+    ctx.textAlign = 'left';
+  }
+
+  function draw() {
+    if (gameState === 'title') drawTitleScreen();
+    else if (gameState === 'menu') drawMenuScreen();
+    else if (gameState === 'upgrades') drawUpgradesScreen();
+    else drawPlayScreen();
   }
 
   // ============================================================

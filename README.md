@@ -12,7 +12,9 @@ self-contained file (canvas 2D, no build step, no external assets, no server
 required), so it also works fully offline and is a natural candidate for
 wrapping in Electron/Tauri/nw.js later to ship as a downloadable desktop app.
 
-**Controls:** WASD to move, J to attack, R to fully reset the run.
+**Flow:** Title screen → Enter → main menu (Start / Upgrades). **In-game
+controls:** WASD to move, J to attack, R to abandon the current run and
+return to the menu.
 
 ## How it works
 
@@ -28,8 +30,21 @@ wrapping in Electron/Tauri/nw.js later to ship as a downloadable desktop app.
   masks + shading functions (see `buildSprite()` / `SPRITES` in the source),
   not hand-drawn pixel art.
 
+## Meta-progression
+
+- Monsters have a 1% chance to drop a gold coin on death; walk over it to
+  collect. An uncollected coin sits forever until you either pick it up or
+  die — dying (not just returning to the menu) clears whatever's still on
+  the ground. Gold you've actually banked is permanent and saved to
+  `localStorage`, independent of runs, deaths, or resets.
+- Spend gold in the Upgrades menu on permanent, run-independent boosts
+  (starting attack, starting max HP, movement speed %, experience gain %).
+  "Respec" fully refunds gold spent on upgrades so you can reallocate it —
+  it never destroys gold you've earned.
+
 ## Known next steps
 
 - Touch controls (virtual joystick + attack button) for mobile.
 - Responsive canvas sizing (currently a fixed 700x480).
 - Deciding whether ghosts should eventually cap or expire.
+- Expanding the upgrade list beyond the current starter set.
