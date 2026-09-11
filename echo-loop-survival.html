@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Echo Loop</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #0b0c10;
+    color: #e8e8ec;
+    font-family: 'Courier New', monospace;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  canvas {
+    background: #14151b;
+    image-rendering: pixelated;
+    border: 2px solid #3a3d4a;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+  #title {
+    font-size: 20px;
+    letter-spacing: 4px;
+    color: #d9b45c;
+    text-shadow: 0 0 12px rgba(217,180,92,0.5);
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="title">ECHO LOOP</div>
+  <canvas id="game" width="700" height="480"></canvas>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  // ============================================================
+  // CONSTANTS
+  // ============================================================
+  const CANVAS_W = 700, CANVAS_H = 480;
+  const SPRITE_SIZE = 15;
+  const TICK = 1 / 60;
+  const MAX_ENEMIES = 150;
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  // ============================================================
+  // COLOR HELPERS
+  // ============================================================
+  function clampByte(v) { return Math.max(0, Math.min(255, Math.round(v))); }
+  function mulColor(base, factor) {
+    return [clampByte(base[0] * factor), clampByte(base[1] * factor), clampByte(base[2] * factor), 255];
+  }
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+    if (max === min) { h = 0; s = 0; }
+    else {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        default: h = (r - g) / d + 4; break;
+      }
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+  function hslToRgb(h, s, l) {
+    let r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      const hue2rgb = (p, q, t) => {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1 / 6) return p + (q - p) * 6 * t;
+        if (t < 1 / 2) return q;
+        if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+        return p;
+      };
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1 / 3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h - 1 / 3);
+    }
+    return [clampByte(r * 255), clampByte(g * 255), clampByte(b * 255)];
+  }
+
+  // ============================================================
+  // PROCEDURAL SPRITE SYSTEM
+  // Sprites are math-defined silhouettes (mask + shading fn),
+  // rendered at SPRITE_SIZE resolution with an automatic 1px
+  // outline on any filled pixel touching an empty neighbor.
+  // ============================================================
+  function buildSprite(maskFn, shadeFn) {
+    const filled = [];
+    for (let y = 0; y < SPRITE_SIZE; y++) {
+      const row = [];
+      for (let x = 0; x < SPRITE_SIZE; x++) row.push(!!maskFn(x, y));
+      filled.push(row);
+    }
+    const spriteCanvas = document.createElement('canvas');
+    spriteCanvas.width = SPRITE_SIZE;
+    spriteCanvas.height = SPRITE_SIZE;
+    const sctx = spriteCanvas.getContext('2d');
+    const img = sctx.createImageData(SPRITE_SIZE, SPRITE_SIZE);
+    for (let y = 0; y < SPRITE_SIZE; y++) {
+      for (let x = 0; x < SPRITE_SIZE; x++) {
+        const idx = (y * SPRITE_SIZE + x) * 4;
+        if (!filled[y][x]) { img.data[idx + 3] = 0; continue; }
+        let edge = false;
+        const neigh = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]];
+        for (const [nx, ny] of neigh) {
+          if (nx < 0 || nx >= SPRITE_SIZE || ny < 0 || ny >= SPRITE_SIZE || !filled[ny][nx]) { edge = true; break; }
+        }
+        const color = edge ? [14, 14, 18, 255] : shadeFn(x, y);
+        img.data[idx] = color[0]; img.data[idx + 1] = color[1]; img.data[idx + 2] = color[2]; img.data[idx + 3] = color[3] ?? 255;
+      }
+    }
+    sctx.putImageData(img, 0, 0);
+    return spriteCanvas;
+  }
+
+  // Recolors a sprite by overriding hue/saturation while preserving
+  // per-pixel lightness (shading). Near-black outline/detail pixels
+  // are left untouched so silhouettes stay crisp.
+  function tintSprite(src, hue, sat) {
+    const c = document.createElement('canvas');
+    c.width = SPRITE_SIZE; c.height = SPRITE_SIZE;
+    const tctx = c.getContext('2d');
+    tctx.drawImage(src, 0, 0);
+    const img = tctx.getImageData(0, 0, SPRITE_SIZE, SPRITE_SIZE);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      if ((r + g + b) / 3 < 40) continue; // preserve outline
+      const [, , l] = rgbToHsl(r, g, b);
+      const [nr, ng, nb] = hslToRgb(hue, sat, l);
+      d[i] = nr; d[i + 1] = ng; d[i + 2] = nb;
+    }
+    tctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  // --- Player (grayscale "clay" base; recolored via tintSprite) ---
+  function playerMask(x, y) {
+    const dx = x - 7;
+    if (Math.hypot(dx, y - 3.4) <= 2.2) return true; // head
+    if (y >= 6 && y <= 13) {
+      const hw = 2.0 + (y - 6) * 0.32;
+      if (Math.abs(dx) <= hw) return true; // body
+    }
+    return false;
+  }
+  function playerShade(x, y) {
+    const dx = x - 7;
+    let l = 0.55 + (7 - y) * 0.02 - Math.abs(dx) * 0.015;
+    l = Math.max(0.25, Math.min(0.85, l));
+    const v = clampByte(l * 255);
+    return [v, v, v, 255];
+  }
+
+  // --- Slime ---
+  function slimeMask(x, y) {
+    const dx = x - 7, dy = y - 8.5;
+    return (dx * dx) / (6.2 * 6.2) + (dy * dy) / (5.0 * 5.0) <= 1;
+  }
+  function slimeShade(x, y) {
+    const factor = 0.65 + (8.5 - y) * 0.06;
+    return mulColor([70, 175, 80], factor);
+  }
+
+  // --- Bat ---
+  function batMask(x, y) {
+    const dx = x - 7, dy = y - 8;
+    if ((dx * dx) / (3.0 * 3.0) + (dy * dy) / (3.6 * 3.6) <= 1) return true;
+    if (y >= 6 && y <= 10) {
+      const t = (y - 6) / 4;
+      const wingLen = 5 * (1 - Math.abs(t - 0.5) * 1.4);
+      if (dx <= -3 && dx >= -3 - wingLen) return true;
+      if (dx >= 3 && dx <= 3 + wingLen) return true;
+    }
+    return false;
+  }
+  function batShade(x, y) {
+    if ((x === 5 || x === 9) && y === 7) return [225, 30, 40, 255]; // eyes
+    const factor = 0.7 + (8 - y) * 0.05;
+    return mulColor([120, 60, 155], factor);
+  }
+
+  // --- Brute ---
+  function bruteMask(x, y) {
+    const dx = x - 7, dy = y - 8.5;
+    if ((dx * dx) / (6.8 * 6.8) + (dy * dy) / (5.6 * 5.6) <= 1) return true;
+    if (y >= 1 && y <= 3) {
+      if (x >= 3 && x <= 4) return true;
+      if (x >= 10 && x <= 11) return true;
+    }
+    return false;
+  }
+  function bruteShade(x, y) {
+    if ((y === 11 || y === 12) && (x === 5 || x === 9)) return [235, 235, 225, 255]; // tusks
+    if (y === 7 && (x === 5 || x === 9)) return [240, 220, 40, 255]; // eyes
+    if (y <= 3 && (x === 3 || x === 4 || x === 10 || x === 11)) return [230, 230, 220, 255]; // horns
+    const factor = 0.65 + (8.5 - y) * 0.045;
+    return mulColor([160, 45, 45], factor);
+  }
+
+  const SPRITES = {
+    player: buildSprite(playerMask, playerShade),
+    slime: buildSprite(slimeMask, slimeShade),
+    bat: buildSprite(batMask, batShade),
+    brute: buildSprite(bruteMask, bruteShade),
+  };
+
+  const ALIVE_SPRITE = tintSprite(SPRITES.player, 0.56, 0.55);
+
+  const ghostSpriteCache = new Map();
+  function ghostSpriteFor(generation) {
+    if (ghostSpriteCache.has(generation)) return ghostSpriteCache.get(generation);
+    const t = Math.max(0, Math.min(1, generation / 8)); // normalized power (0..1)
+    const hue = 0.15 - t * 0.04;   // drifts toward a richer gold as power rises
+    const sat = 0.03 + t * 0.82;   // grey (low sat) -> vivid gold (high sat)
+    const spr = tintSprite(SPRITES.player, hue, sat);
+    ghostSpriteCache.set(generation, spr);
+    return spr;
+  }
+
+  function drawSprite(sprite, x, y, size, alpha) {
+    ctx.save();
+    if (alpha !== undefined) ctx.globalAlpha = alpha;
+    ctx.drawImage(sprite, Math.round(x - size / 2), Math.round(y - size / 2), size, size);
+    ctx.restore();
+  }
+
+  // ============================================================
+  // GAME STATE
+  // ============================================================
+  const ENEMY_STATS = {
+    slime: { hpMult: 1.0, speed: 55, dmg: 4, r: 9, xp: 3 },
+    bat: { hpMult: 0.65, speed: 105, dmg: 5, r: 8, xp: 5 },
+    brute: { hpMult: 2.2, speed: 40, dmg: 10, r: 12, xp: 9 },
+  };
+
+  let elapsed = 0;          // global survival clock; never resets except full reset
+  let lifeNumber = 1;
+  let player, enemies, ghosts, recording, toasts, keys, attackPressed;
+
+  function freshPlayer() {
+    return {
+      x: CANVAS_W / 2, y: CANVAS_H / 2,
+      r: 9,
+      hp: 30, maxHp: 30,
+      level: 1, xp: 0, xpNext: 9,
+      speed: 150,
+      dmg: 8, atkRange: 46, atkCooldown: 0.45,
+      atkTimer: 0,
+      attacking: false,
+      invuln: 0,
+    };
+  }
+
+  function resetGame() {
+    elapsed = 0;
+    lifeNumber = 1;
+    player = freshPlayer();
+    enemies = [];
+    ghosts = [];
+    recording = [];
+    toasts = [];
+    spawnTimer = 0;
+    addToast('A new loop begins.');
+  }
+
+  // -------- ghost power ramp: the key mechanic --------
+  // Each new ghost's strength depends only on how many ghosts already
+  // exist (generation index), NOT on the level reached that life.
+  function nextLife() {
+    const generation = ghosts.length;
+    const powerMult = 0.55 + generation * 0.22;
+    if (recording.length > 2) {
+      ghosts.push({
+        generation,
+        powerMult,
+        frames: recording,
+        duration: recording.length * TICK,
+        startTime: elapsed,
+        sprite: ghostSpriteFor(generation),
+        dmg: 6 * powerMult,
+        atkRange: 44,
+      });
+      addToast(`Ghost #${generation + 1} joins the fight (power x${powerMult.toFixed(2)})`);
+    }
+    recording = [];
+    lifeNumber++;
+    enemies = []; // fresh room for the new (weak) life; difficulty clock keeps climbing
+    player = freshPlayer();
+  }
+
+  function addToast(text) {
+    toasts.push({ text, timer: 3.0 });
+  }
+
+  // ============================================================
+  // ENEMY SPAWNING — deliberately uncapped difficulty ramp
+  // ============================================================
+  let spawnTimer = 0;
+  function pickEnemyType() {
+    const wSlime = Math.max(0.08, 1 - elapsed / 120);
+    const wBat = elapsed > 12 ? Math.min(1, (elapsed - 12) / 50) : 0.03;
+    const wBrute = elapsed > 40 ? Math.min(1, (elapsed - 40) / 90) : 0.02;
+    const total = wSlime + wBat + wBrute;
+    let r = Math.random() * total;
+    if (r < wSlime) return 'slime';
+    r -= wSlime;
+    if (r < wBat) return 'bat';
+    return 'brute';
+  }
+
+  function spawnEnemy() {
+    if (enemies.length >= MAX_ENEMIES) return;
+    const type = pickEnemyType();
+    const stats = ENEMY_STATS[type];
+    const ramp = elapsed / 40; // <-- difficulty knob: no ceiling on purpose
+    const hp = (22 + ramp * 16) * stats.hpMult;
+
+    let x, y;
+    const edge = Math.floor(Math.random() * 4);
+    if (edge === 0) { x = Math.random() * CANVAS_W; y = -12; }
+    else if (edge === 1) { x = CANVAS_W + 12; y = Math.random() * CANVAS_H; }
+    else if (edge === 2) { x = Math.random() * CANVAS_W; y = CANVAS_H + 12; }
+    else { x = -12; y = Math.random() * CANVAS_H; }
+
+    enemies.push({
+      type, x, y, hp, maxHp: hp,
+      speed: stats.speed, dmg: stats.dmg, r: stats.r, xp: stats.xp,
+      hitCooldown: 0,
+    });
+  }
+
+  // ============================================================
+  // INPUT
+  // ============================================================
+  keys = new Set();
+  attackPressed = false;
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (['w', 'a', 's', 'd'].includes(k)) keys.add(k);
+    if (k === 'j') attackPressed = true;
+    if (k === 'r') resetGame();
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = e.key.toLowerCase();
+    keys.delete(k);
+  });
+
+  // ============================================================
+  // UPDATE
+  // ============================================================
+  function doAttack(actorX, actorY, range, dmg, isPlayerAttack) {
+    for (const e of enemies) {
+      const d = Math.hypot(e.x - actorX, e.y - actorY);
+      if (d <= range + e.r) {
+        e.hp -= dmg;
+        e.hitFlash = 0.08;
+      }
+    }
+    if (isPlayerAttack) {
+      // resolve deaths immediately so xp/leveling feels responsive
+    }
+  }
+
+  function killDeadEnemies(awardXpToPlayer) {
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      if (enemies[i].hp <= 0) {
+        if (awardXpToPlayer) gainXp(enemies[i].xp);
+        enemies.splice(i, 1);
+      }
+    }
+  }
+
+  function gainXp(amount) {
+    player.xp += amount;
+    while (player.xp >= player.xpNext) {
+      player.xp -= player.xpNext;
+      player.level++;
+      player.xpNext = 5 + player.level * 4;
+      player.maxHp += 4;
+      player.hp = Math.min(player.maxHp, player.hp + 4);
+      player.dmg += 1;
+      player.speed = Math.min(210, player.speed + 2);
+      player.atkRange = Math.min(64, player.atkRange + 1);
+      addToast(`Level up! Lv ${player.level}`);
+    }
+  }
+
+  function updatePlayer(dt) {
+    let dx = 0, dy = 0;
+    if (keys.has('w')) dy -= 1;
+    if (keys.has('s')) dy += 1;
+    if (keys.has('a')) dx -= 1;
+    if (keys.has('d')) dx += 1;
+    if (dx !== 0 || dy !== 0) {
+      const len = Math.hypot(dx, dy);
+      dx /= len; dy /= len;
+      player.x += dx * player.speed * dt;
+      player.y += dy * player.speed * dt;
+    }
+    player.x = Math.max(player.r, Math.min(CANVAS_W - player.r, player.x));
+    player.y = Math.max(player.r, Math.min(CANVAS_H - player.r, player.y));
+
+    player.attacking = false;
+    player.atkTimer -= dt;
+    if (attackPressed && player.atkTimer <= 0) {
+      player.atkTimer = player.atkCooldown;
+      player.attacking = true;
+      doAttack(player.x, player.y, player.atkRange, player.dmg, true);
+    }
+    attackPressed = false;
+
+    if (player.invuln > 0) player.invuln -= dt;
+
+    // record this tick of the current life for future ghost playback
+    recording.push({ x: player.x, y: player.y, attacking: player.attacking });
+  }
+
+  function updateEnemies(dt) {
+    for (const e of enemies) {
+      const ddx = player.x - e.x, ddy = player.y - e.y;
+      const d = Math.hypot(ddx, ddy) || 1;
+      e.x += (ddx / d) * e.speed * dt;
+      e.y += (ddy / d) * e.speed * dt;
+      if (e.hitFlash > 0) e.hitFlash -= dt;
+      if (e.hitCooldown > 0) e.hitCooldown -= dt;
+
+      const touchDist = e.r + player.r;
+      if (d <= touchDist && e.hitCooldown <= 0 && player.invuln <= 0) {
+        player.hp -= e.dmg;
+        e.hitCooldown = 0.6;
+        player.invuln = 0.3;
+      }
+    }
+    killDeadEnemies(true);
+  }
+
+  function updateGhosts(dt) {
+    for (const g of ghosts) {
+      const local = ((elapsed - g.startTime) % g.duration + g.duration) % g.duration;
+      let idx = Math.floor(local / TICK);
+      if (idx >= g.frames.length) idx = g.frames.length - 1;
+      const prevIdx = idx === 0 ? g.frames.length - 1 : idx - 1;
+      const frame = g.frames[idx];
+      g.x = frame.x; g.y = frame.y;
+      // rising edge of the recorded attack flag re-triggers real damage
+      if (frame.attacking && !g.frames[prevIdx].attacking) {
+        doAttack(g.x, g.y, g.atkRange, g.dmg, false);
+      }
+      g.attacking = frame.attacking;
+    }
+    killDeadEnemies(false);
+  }
+
+  function updateSpawning(dt) {
+    spawnTimer -= dt;
+    const interval = Math.max(0.22, 1.6 - elapsed * 0.01);
+    if (spawnTimer <= 0) {
+      spawnTimer = interval;
+      spawnEnemy();
+    }
+  }
+
+  function updateToasts(dt) {
+    for (let i = toasts.length - 1; i >= 0; i--) {
+      toasts[i].timer -= dt;
+      if (toasts[i].timer <= 0) toasts.splice(i, 1);
+    }
+  }
+
+  function update(dt) {
+    elapsed += dt;
+    updatePlayer(dt);
+    updateEnemies(dt);
+    updateGhosts(dt);
+    updateSpawning(dt);
+    updateToasts(dt);
+
+    if (player.hp <= 0) {
+      nextLife();
+    }
+  }
+
+  // ============================================================
+  // DRAW
+  // ============================================================
+  function drawBackground() {
+    ctx.fillStyle = '#14151b';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.lineWidth = 1;
+    const step = 40;
+    for (let x = 0; x <= CANVAS_W; x += step) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+    }
+    for (let y = 0; y <= CANVAS_H; y += step) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+    }
+  }
+
+  function drawEnemy(e) {
+    const size = e.r * 2.6;
+    if (e.hitFlash > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      drawSprite(SPRITES[e.type], e.x, e.y, size);
+      ctx.restore();
+    } else {
+      drawSprite(SPRITES[e.type], e.x, e.y, size);
+    }
+    // hp bar
+    const w = size;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(e.x - w / 2, e.y - size / 2 - 6, w, 3);
+    ctx.fillStyle = '#c0453f';
+    ctx.fillRect(e.x - w / 2, e.y - size / 2 - 6, w * Math.max(0, e.hp / e.maxHp), 3);
+  }
+
+  function drawGhost(g) {
+    drawSprite(g.sprite, g.x, g.y, 24, 0.88);
+    if (g.attacking) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(230,190,90,0.5)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(g.x, g.y, g.atkRange, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawPlayer() {
+    if (player.attacking) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(120,190,255,0.6)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, player.atkRange, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    const flicker = player.invuln > 0 && Math.floor(elapsed * 20) % 2 === 0;
+    drawSprite(ALIVE_SPRITE, player.x, player.y, 26, flicker ? 0.4 : 1);
+  }
+
+  function drawBar(x, y, w, h, pct, fg, bg) {
+    ctx.fillStyle = bg;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = fg;
+    ctx.fillRect(x, y, w * Math.max(0, Math.min(1, pct)), h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.strokeRect(x, y, w, h);
+  }
+
+  function formatTime(t) {
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  function drawHud() {
+    ctx.fillStyle = '#e8e8ec';
+    ctx.font = '13px "Courier New", monospace';
+    ctx.fillText(`Life #${lifeNumber}   Lv ${player.level}   Ghosts: ${ghosts.length}   Time: ${formatTime(elapsed)}`, 10, 18);
+
+    drawBar(10, 26, 160, 10, player.hp / player.maxHp, '#c0453f', 'rgba(0,0,0,0.5)');
+    ctx.fillStyle = '#fff';
+    ctx.font = '9px monospace';
+    ctx.fillText(`HP ${Math.max(0, Math.ceil(player.hp))}/${player.maxHp}`, 14, 34);
+
+    drawBar(10, 40, 160, 6, player.xp / player.xpNext, '#d9b45c', 'rgba(0,0,0,0.5)');
+
+    ctx.font = '11px monospace';
+    ctx.fillStyle = 'rgba(230,230,236,0.7)';
+    ctx.fillText('WASD move  ·  J attack  ·  R reset', 10, CANVAS_H - 10);
+
+    let ty = 60;
+    ctx.textAlign = 'center';
+    for (const t of toasts) {
+      ctx.globalAlpha = Math.min(1, t.timer);
+      ctx.fillStyle = '#d9b45c';
+      ctx.font = '13px monospace';
+      ctx.fillText(t.text, CANVAS_W / 2, ty);
+      ty += 18;
+      ctx.globalAlpha = 1;
+    }
+    ctx.textAlign = 'left';
+  }
+
+  function draw() {
+    drawBackground();
+    for (const g of ghosts) drawGhost(g);
+    for (const e of enemies) drawEnemy(e);
+    drawPlayer();
+    drawHud();
+  }
+
+  // ============================================================
+  // MAIN LOOP — fixed timestep so ghost recording/replay stays
+  // consistent regardless of frame rate.
+  // ============================================================
+  let last = performance.now();
+  let acc = 0;
+  function frame(now) {
+    let dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.25) dt = 0.25; // guard against tab-switch stalls
+    acc += dt;
+    while (acc >= TICK) {
+      update(TICK);
+      acc -= TICK;
+    }
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  resetGame();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
