@@ -13,8 +13,9 @@ required), so it also works fully offline and is a natural candidate for
 wrapping in Electron/Tauri/nw.js later to ship as a downloadable desktop app.
 
 **Flow:** Title screen → Enter → main menu (Start / Upgrades). **In-game
-controls:** WASD to move, J to attack, R to abandon the current run and
-return to the menu.
+controls:** WASD to move, R to abandon the current run and return to the
+menu — that's it. All attacks (Strike included) fire themselves on their
+own cooldown; there's nothing to press to attack.
 
 ## How it works
 
@@ -35,14 +36,24 @@ return to the menu.
   (death order), not on the level you happened to reach that life — so early
   ghosts are weak and later ones carry hard. This is shown visually: ghosts
   are the player sprite recolored grey → gold as their power increases.
-- **Leveling grants attacks, not stats.** Your starting melee strike is
-  slot 1 of a 6-attack max; levels 2-6 each unlock one more, which then
-  fires itself on its own cooldown (no extra keybinds — same idea as
-  Vampire Survivors' auto-weapons). Re-reaching a level you already have
-  (common since level resets every death, unlike the attacks themselves)
-  just does nothing until you level past your prior best in that run.
-  The current 5 unlockable attacks (`ATTACK_DEFS` in the source) are
-  placeholders standing in for a real attack/animation list to come later.
+- **Leveling grants attacks, not stats — and you choose which one.** Your
+  starting Strike is slot 1 of a 6-attack max. Every level-up with an open
+  slot freezes the game and offers a choice of (usually 3) random attacks
+  you don't already have; picking one adds it to your kit, where it then
+  fires itself on cooldown forever (Vampire Survivors-style auto-weapons —
+  nothing to press). Re-reaching a level you already spent (common since
+  level resets every death, unlike your unlocked attacks) does nothing
+  until you level past your prior best in that run. The current 5
+  choosable attacks (`ATTACK_DEFS` in the source) are placeholders:
+  - **Echo Bolt** — fires a bolt at the nearest enemy.
+  - **Shock Pulse** — a wide ring blast around you, hits everything close.
+  - **Blade Orbit** — spectral blades orbit you, damaging on contact.
+  - **Chain Spark** — lightning arcs between nearby enemies.
+  - **Meteor Call** — slow-charging, but hits hard.
+
+  These stand in for a real attack/animation list to come later — the
+  choose-on-level-up flow and the 6-slot cap won't need to change, just
+  the contents of `ATTACK_DEFS`.
 - **3 lives per run**, shown top-left. Losing all of them ends the run on
   a Game Over screen. Buy more (the "Extra Life" Upgrade Shop entry, up to
   9 total) — it's priced steeper than the other upgrades: double their
@@ -53,7 +64,11 @@ return to the menu.
   each life started) stay within reach instead of getting left behind.
 - All sprites are procedurally generated at load time from math-defined
   masks + shading functions (see `buildSprite()` / `SPRITES` in the source),
-  not hand-drawn pixel art.
+  not hand-drawn pixel art — bigger (24x24) and more detailed than earlier
+  passes (armored player silhouette with pauldrons and a drawn blade,
+  glossy slime, horned/fanged bat, ogre-ish brute), though still bound by
+  what a tiny procedural grid can express; genuine painterly/realistic
+  fantasy art would mean switching to actual image assets instead.
 
 ## Meta-progression
 
@@ -75,3 +90,5 @@ return to the menu.
 - Expanding the upgrade list beyond the current starter set.
 - Swapping the 5 placeholder auto-attacks for the real attack/animation
   list once it's ready.
+- Real image assets if/when genuinely realistic art is wanted — the
+  procedural sprite system has a ceiling on how detailed it can look.
