@@ -48,6 +48,12 @@
   // CONSTANTS
   // ============================================================
   const CANVAS_W = 700, CANVAS_H = 480;
+  // The playable world is bigger than the viewport (a camera follows the
+  // player so the background scrolls), but deliberately bounded rather
+  // than sprawling: ghosts loop near wherever each life started, so a
+  // huge open world would let the player wander out of their echoes'
+  // reach and lose the aggro-soak entirely.
+  const WORLD_W = CANVAS_W * 2, WORLD_H = CANVAS_H * 2;
   const SPRITE_SIZE = 15;
   const TICK = 1 / 60;
   const MAX_ENEMIES = 220;
@@ -183,8 +189,10 @@
     return (dx * dx) / (6.2 * 6.2) + (dy * dy) / (5.0 * 5.0) <= 1;
   }
   function slimeShade(x, y) {
-    const factor = 0.65 + (8.5 - y) * 0.06;
-    return mulColor([70, 175, 80], factor);
+    const dx = x - 7, dy = y - 8.5;
+    if (dx * dx + (dy + 1) * (dy + 1) <= 4) return [190, 250, 140, 255]; // bright highlight patch
+    const factor = 0.6 + (8.5 - y) * 0.075;
+    return mulColor([50, 220, 95], factor);
   }
 
   // --- Bat ---
@@ -200,9 +208,10 @@
     return false;
   }
   function batShade(x, y) {
-    if ((x === 5 || x === 9) && y === 7) return [225, 30, 40, 255]; // eyes
-    const factor = 0.7 + (8 - y) * 0.05;
-    return mulColor([120, 60, 155], factor);
+    if ((x === 5 || x === 9) && y === 7) return [255, 40, 60, 255]; // eyes
+    const wing = Math.abs(x - 7) > 3;
+    const factor = 0.72 + (8 - y) * 0.06;
+    return wing ? mulColor([190, 50, 220], factor) : mulColor([150, 60, 235], factor);
   }
 
   // --- Brute ---
@@ -216,11 +225,11 @@
     return false;
   }
   function bruteShade(x, y) {
-    if ((y === 11 || y === 12) && (x === 5 || x === 9)) return [235, 235, 225, 255]; // tusks
-    if (y === 7 && (x === 5 || x === 9)) return [240, 220, 40, 255]; // eyes
-    if (y <= 3 && (x === 3 || x === 4 || x === 10 || x === 11)) return [230, 230, 220, 255]; // horns
-    const factor = 0.65 + (8.5 - y) * 0.045;
-    return mulColor([160, 45, 45], factor);
+    if ((y === 11 || y === 12) && (x === 5 || x === 9)) return [245, 245, 235, 255]; // tusks
+    if (y === 7 && (x === 5 || x === 9)) return [255, 225, 30, 255]; // eyes
+    if (y <= 3 && (x === 3 || x === 4 || x === 10 || x === 11)) return [235, 190, 90, 255]; // horns
+    const factor = 0.62 + (8.5 - y) * 0.06;
+    return mulColor([225, 55, 35], factor);
   }
 
   // --- Coin (gold pickup) ---
@@ -230,10 +239,11 @@
   }
   function coinShade(x, y) {
     const dx = x - 7, dy = y - 7;
+    if (dx * dx + (dy + 1.5) * (dy + 1.5) <= 3) return [255, 250, 220, 255]; // shine glint
     // ring rim + bright inner face, lit from upper-left
     const rim = dx * dx + dy * dy >= 22;
-    const factor = 0.85 - dy * 0.05 - dx * 0.03;
-    return rim ? mulColor([170, 130, 30], factor) : mulColor([250, 205, 70], factor);
+    const factor = 0.9 - dy * 0.06 - dx * 0.035;
+    return rim ? mulColor([200, 145, 20], factor) : mulColor([255, 205, 40], factor);
   }
 
   const SPRITES = {
@@ -260,24 +270,59 @@
   }
   function titleShade(x, y) {
     const dx = x - 16, dy = y - 14;
-    if (dy >= -3 && dy <= -1 && (Math.abs(dx - 3) <= 1 || Math.abs(dx + 3) <= 1)) return [255, 205, 90, 255]; // glowing eyes
+    if (dy >= -3 && dy <= -1 && (Math.abs(dx - 3) <= 1 || Math.abs(dx + 3) <= 1)) return [255, 215, 70, 255]; // glowing eyes
     const l = Math.max(0.35, Math.min(1.15, 0.62 - dy * 0.015 - Math.abs(dx) * 0.012));
-    return mulColor([96, 82, 128], l);
+    return mulColor([115, 70, 190], l);
   }
   const TITLE_SPRITE = buildSprite(titleMask, titleShade, TITLE_SPRITE_SIZE);
 
-  const ALIVE_SPRITE = tintSprite(SPRITES.player, 0.56, 0.55);
+  const ALIVE_SPRITE = tintSprite(SPRITES.player, 0.55, 0.75);
 
   const ghostSpriteCache = new Map();
   function ghostSpriteFor(generation) {
     if (ghostSpriteCache.has(generation)) return ghostSpriteCache.get(generation);
     const t = Math.max(0, Math.min(1, generation / 8)); // normalized power (0..1)
     const hue = 0.15 - t * 0.04;   // drifts toward a richer gold as power rises
-    const sat = 0.03 + t * 0.82;   // grey (low sat) -> vivid gold (high sat)
+    const sat = 0.05 + t * 0.92;   // grey (low sat) -> vivid gold (high sat)
     const spr = tintSprite(SPRITES.player, hue, sat);
     ghostSpriteCache.set(generation, spr);
     return spr;
   }
+
+  // --- World decoration (cosmetic, no collision) — adds color/variety to
+  // the ground and, since it's placed in world-space, sells the parallax
+  // scroll as the camera moves across it.
+  function rockMask(x, y) {
+    const dx = x - 7, dy = y - 8;
+    return (dx * dx) / (6 * 6) + (dy * dy) / (4.6 * 4.6) <= 1;
+  }
+  function rockShade(x, y) {
+    const factor = 0.6 + (8 - y) * 0.06;
+    return mulColor([120, 128, 145], factor);
+  }
+  function weedMask(x, y) {
+    const dx = x - 7;
+    const blade = Math.abs(((dx * 37) % 5) - 2.5);
+    return y >= 6 && y <= 13 && blade <= 1.1 - (13 - y) * 0.04;
+  }
+  function weedShade(x, y) {
+    const factor = 0.7 + (13 - y) * 0.05;
+    return mulColor([70, 210, 90], factor);
+  }
+  function boneMask(x, y) {
+    const dx = x - 7, dy = y - 7;
+    if (Math.abs(dy) <= 1.1 && Math.abs(dx) <= 5) return true;
+    if ((Math.hypot(dx - 5, dy) <= 2 || Math.hypot(dx + 5, dy) <= 2)) return true;
+    return false;
+  }
+  function boneShade() { return [225, 218, 195, 255]; }
+
+  const DECOR_SPRITES = {
+    rock: buildSprite(rockMask, rockShade),
+    weed: buildSprite(weedMask, weedShade),
+    bone: buildSprite(boneMask, boneShade),
+  };
+  const DECOR_TYPES = Object.keys(DECOR_SPRITES);
 
   function drawSprite(sprite, x, y, size, alpha) {
     ctx.save();
@@ -293,11 +338,16 @@
   // deletes lifetime earnings.
   // ============================================================
   const SAVE_KEY = 'echoLoopSave';
+  const BASE_LIVES = 3;
   const UPGRADES = [
     { id: 'attack', name: 'Sharpened Instincts', desc: '+1 starting attack damage', maxLevel: 5, baseCost: 10, costGrowth: 1.6 },
     { id: 'expGain', name: 'Quick Study', desc: '+5% experience gained', maxLevel: 5, baseCost: 12, costGrowth: 1.6 },
     { id: 'speed', name: 'Light Feet', desc: '+3% movement speed', maxLevel: 5, baseCost: 10, costGrowth: 1.6 },
     { id: 'maxHp', name: 'Vitality', desc: '+5 starting max HP', maxLevel: 5, baseCost: 14, costGrowth: 1.7 },
+    // Priced double a normal upgrade's base cost, and doubles again with
+    // every purchase (steeper than the ~1.6x growth above) — lives are
+    // precious. 6 levels + the base 3 lives caps the run at 9 total.
+    { id: 'lives', name: 'Extra Life', desc: '+1 maximum life (caps at 9 total)', maxLevel: 9 - BASE_LIVES, baseCost: 20, costGrowth: 2 },
   ];
 
   function defaultUpgradeLevels() {
@@ -352,6 +402,23 @@
   }
 
   // ============================================================
+  // ATTACKS — leveling grants these instead of stat boosts. The starting
+  // J-melee strike is slot 1 of the 6-attack max; levels 2-6 unlock the
+  // rest automatically (Vampire-Survivors style: once unlocked, they fire
+  // themselves on a cooldown, no extra keybinds needed). These are
+  // placeholders — swap ATTACK_DEFS for the real list/animations later,
+  // everything else (unlock-on-level-up, the 6-slot cap) stays the same.
+  // ============================================================
+  const ATTACK_DEFS = [
+    { id: 'echoBolt', name: 'Echo Bolt', unlockLevel: 2, type: 'projectile', cooldown: 1.1, range: 480, projectileSpeed: 260, dmgMult: 0.8, color: '#7fd1ff' },
+    { id: 'shockPulse', name: 'Shock Pulse', unlockLevel: 3, type: 'nova', cooldown: 2.6, radius: 70, dmgMult: 0.9, color: '#b98cff' },
+    { id: 'bladeOrbit', name: 'Blade Orbit', unlockLevel: 4, type: 'orbit', dmgMult: 0.35, color: '#ffe08a' },
+    { id: 'chainSpark', name: 'Chain Spark', unlockLevel: 5, type: 'chain', cooldown: 2.0, chainRange: 100, chainCount: 2, dmgMult: 0.6, color: '#8affc1' },
+    { id: 'meteorCall', name: 'Meteor Call', unlockLevel: 6, type: 'nova', cooldown: 4.0, radius: 110, dmgMult: 1.8, color: '#ff8a5c' },
+  ];
+  const MAX_ATTACKS = 6; // includes the starting melee strike
+
+  // ============================================================
   // GAME STATE
   // ============================================================
   const ENEMY_STATS = {
@@ -373,12 +440,32 @@
   function randomTierInterval() { return 15 + Math.random() * 15; }
 
   let player, enemies, ghosts, recording, toasts, coins, keys, attackPressed;
+  let unlockedAttacks, projectiles, decor;
+  let maxLives = BASE_LIVES, livesRemaining = BASE_LIVES;
+  const camera = { x: WORLD_W / 2, y: WORLD_H / 2 };
 
-  // 'title' -> 'menu' -> ('upgrades' | 'playing')
+  // 'title' -> 'menu' -> ('upgrades' | 'playing' | 'gameover')
   let gameState = 'title';
   let menuSelection = 0;
   let upgradeSelection = 0;
   let mouseX = -1, mouseY = -1;
+
+  function worldToScreen(x, y) {
+    return { x: x - camera.x + CANVAS_W / 2, y: y - camera.y + CANVAS_H / 2 };
+  }
+
+  function generateDecor() {
+    const list = [];
+    for (let i = 0; i < 90; i++) {
+      list.push({
+        type: DECOR_TYPES[Math.floor(Math.random() * DECOR_TYPES.length)],
+        x: Math.random() * WORLD_W,
+        y: Math.random() * WORLD_H,
+        scale: 0.8 + Math.random() * 0.7,
+      });
+    }
+    return list;
+  }
 
   function freshPlayer() {
     const atkLv = save.upgrades.attack || 0;
@@ -386,7 +473,7 @@
     const hpLv = save.upgrades.maxHp || 0;
     const maxHp = 30 + hpLv * 5;
     return {
-      x: CANVAS_W / 2, y: CANVAS_H / 2,
+      x: WORLD_W / 2, y: WORLD_H / 2,
       r: 9,
       hp: maxHp, maxHp,
       level: 1, xp: 0, xpNext: 9,
@@ -404,12 +491,18 @@
     lifeElapsed = 0;
     difficultyTier = 0;
     nextTierAt = randomTierInterval();
+    maxLives = BASE_LIVES + (save.upgrades.lives || 0);
+    livesRemaining = maxLives;
     player = freshPlayer();
+    camera.x = player.x; camera.y = player.y;
     enemies = [];
     ghosts = [];
     recording = [];
     toasts = [];
     coins = [];
+    projectiles = [];
+    unlockedAttacks = [];
+    decor = generateDecor();
     spawnTimer = 0;
     addToast('A new loop begins.');
   }
@@ -434,13 +527,20 @@
       addToast(`Ghost #${generation + 1} joins the fight (power x${powerMult.toFixed(2)})`);
     }
     recording = [];
+    livesRemaining--;
+    if (livesRemaining <= 0) {
+      gameState = 'gameover';
+      return;
+    }
     lifeNumber++;
     enemies = [];        // fresh room for the new (weak) life
     coins = [];          // uncollected gold does not survive a death
+    projectiles = [];
     lifeElapsed = 0;     // difficulty tier drops back to the start of the level...
     difficultyTier = 0;
     nextTierAt = randomTierInterval();
     player = freshPlayer(); // ...but the ghost army carried over keeps soaking targeting
+    camera.x = player.x; camera.y = player.y;
   }
 
   function addToast(text) {
@@ -476,12 +576,16 @@
     const stats = ENEMY_STATS[type];
     const hp = BASE_ENEMY_HP * stats.hpMult;
 
+    // spawn just outside the current viewport (camera-relative), not the
+    // whole world, so enemies always enter from off-screen near the player
+    const left = camera.x - CANVAS_W / 2 - 12, right = camera.x + CANVAS_W / 2 + 12;
+    const top = camera.y - CANVAS_H / 2 - 12, bottom = camera.y + CANVAS_H / 2 + 12;
     let x, y;
     const edge = Math.floor(Math.random() * 4);
-    if (edge === 0) { x = Math.random() * CANVAS_W; y = -12; }
-    else if (edge === 1) { x = CANVAS_W + 12; y = Math.random() * CANVAS_H; }
-    else if (edge === 2) { x = Math.random() * CANVAS_W; y = CANVAS_H + 12; }
-    else { x = -12; y = Math.random() * CANVAS_H; }
+    if (edge === 0) { x = left + Math.random() * (right - left); y = top; }
+    else if (edge === 1) { x = right; y = top + Math.random() * (bottom - top); }
+    else if (edge === 2) { x = left + Math.random() * (right - left); y = bottom; }
+    else { x = left; y = top + Math.random() * (bottom - top); }
 
     enemies.push({
       type, x, y, hp, maxHp: hp,
@@ -563,6 +667,11 @@
       return;
     }
 
+    if (gameState === 'gameover') {
+      if (k === 'enter' || k === 'escape') { gameState = 'menu'; menuSelection = 0; }
+      return;
+    }
+
     // gameState === 'playing'
     if (['w', 'a', 's', 'd'].includes(k)) keys.add(k);
     if (k === 'j') attackPressed = true;
@@ -601,6 +710,10 @@
       if (pointInRect(p.x, p.y, bottom.respec)) activateUpgradeAction('respec');
       return;
     }
+    if (gameState === 'gameover') {
+      if (pointInRect(p.x, p.y, gameOverButton())) { gameState = 'menu'; menuSelection = 0; }
+      return;
+    }
   });
 
   // ============================================================
@@ -621,11 +734,13 @@
 
   const GOLD_DROP_CHANCE = 0.01;
 
-  function killDeadEnemies(awardXpToPlayer) {
+  // xpMultiplier: 1 for the player's own kit (melee + auto-attacks), 0.5
+  // for echoes — ghost kills still count, just at half experience.
+  function killDeadEnemies(xpMultiplier) {
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
       if (e.hp <= 0) {
-        if (awardXpToPlayer) gainXp(e.xp);
+        if (xpMultiplier > 0) gainXp(e.xp * xpMultiplier);
         if (Math.random() < GOLD_DROP_CHANCE) coins.push({ x: e.x, y: e.y, r: 7 });
         enemies.splice(i, 1);
       }
@@ -644,6 +759,11 @@
     }
   }
 
+  // Leveling grants no stat boosts — only new unique attacks, up to
+  // MAX_ATTACKS total (melee included). Attacks persist across deaths
+  // within a run since level resets to 1 each life but unlockedAttacks
+  // does not: re-reaching a level you already have skips silently, and
+  // leveling past your prior best in the same life keeps unlocking.
   function gainXp(amount) {
     const expLv = save.upgrades.expGain || 0;
     player.xp += amount * (1 + expLv * 0.05);
@@ -651,12 +771,13 @@
       player.xp -= player.xpNext;
       player.level++;
       player.xpNext = 5 + player.level * 4;
-      player.maxHp += 4;
-      player.hp = Math.min(player.maxHp, player.hp + 4);
-      player.dmg += 1;
-      player.speed = Math.min(210, player.speed + 2);
-      player.atkRange = Math.min(64, player.atkRange + 1);
-      addToast(`Level up! Lv ${player.level}`);
+      const def = ATTACK_DEFS.find(a => a.unlockLevel === player.level);
+      if (def && unlockedAttacks.length < MAX_ATTACKS - 1 && !unlockedAttacks.some(a => a.id === def.id)) {
+        unlockedAttacks.push(Object.assign({}, def, { cooldownTimer: 0, orbitAngle: 0 }));
+        addToast(`Level up! Unlocked ${def.name}!`);
+      } else {
+        addToast(`Level up! Lv ${player.level}`);
+      }
     }
   }
 
@@ -672,8 +793,8 @@
       player.x += dx * player.speed * dt;
       player.y += dy * player.speed * dt;
     }
-    player.x = Math.max(player.r, Math.min(CANVAS_W - player.r, player.x));
-    player.y = Math.max(player.r, Math.min(CANVAS_H - player.r, player.y));
+    player.x = Math.max(player.r, Math.min(WORLD_W - player.r, player.x));
+    player.y = Math.max(player.r, Math.min(WORLD_H - player.r, player.y));
 
     player.attacking = false;
     player.atkTimer -= dt;
@@ -712,6 +833,7 @@
       e.y += (ddy / d) * e.speed * dt;
       if (e.hitFlash > 0) e.hitFlash -= dt;
       if (e.hitCooldown > 0) e.hitCooldown -= dt;
+      if (e.orbitHitCd > 0) e.orbitHitCd -= dt;
 
       const distToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
       const touchDist = e.r + player.r;
@@ -721,7 +843,7 @@
         player.invuln = 0.3;
       }
     }
-    killDeadEnemies(true);
+    killDeadEnemies(1);
   }
 
   function updateGhosts(dt) {
@@ -738,7 +860,109 @@
       }
       g.attacking = frame.attacking;
     }
-    killDeadEnemies(false);
+    killDeadEnemies(0.5); // echo kills count for half experience
+  }
+
+  function updateCamera(dt) {
+    const followRate = Math.min(1, dt * 8);
+    camera.x += (player.x - camera.x) * followRate;
+    camera.y += (player.y - camera.y) * followRate;
+  }
+
+  function findNearestEnemy(x, y, maxRange, exclude) {
+    let best = null, bestD = maxRange;
+    for (const e of enemies) {
+      if (exclude && exclude.includes(e)) continue;
+      const d = Math.hypot(e.x - x, e.y - y);
+      if (d <= bestD) { bestD = d; best = e; }
+    }
+    return best;
+  }
+
+  // Unlocked attacks (beyond the base melee) fire themselves on cooldown —
+  // no extra input needed, matching the genre's "auto weapon" convention.
+  function updateAutoAttacks(dt) {
+    for (const atk of unlockedAttacks) {
+      if (atk.novaFx > 0) atk.novaFx -= dt;
+      if (atk.chainFx) atk.chainFx.timer -= dt;
+
+      if (atk.type === 'orbit') {
+        atk.orbitAngle = (atk.orbitAngle || 0) + dt * 3.2;
+        const bladeCount = 2, bladeR = 34, hitR = 9;
+        for (let i = 0; i < bladeCount; i++) {
+          const ang = atk.orbitAngle + i * (Math.PI * 2 / bladeCount);
+          const bx = player.x + Math.cos(ang) * bladeR, by = player.y + Math.sin(ang) * bladeR;
+          for (const e of enemies) {
+            if (e.orbitHitCd > 0) continue;
+            if (Math.hypot(e.x - bx, e.y - by) <= e.r + hitR) {
+              e.hp -= player.dmg * atk.dmgMult;
+              e.hitFlash = 0.1;
+              e.orbitHitCd = 0.35;
+            }
+          }
+        }
+        continue;
+      }
+
+      atk.cooldownTimer -= dt;
+      if (atk.cooldownTimer > 0) continue;
+
+      if (atk.type === 'projectile') {
+        const target = findNearestEnemy(player.x, player.y, atk.range);
+        if (target) {
+          const ang = Math.atan2(target.y - player.y, target.x - player.x);
+          projectiles.push({
+            x: player.x, y: player.y,
+            vx: Math.cos(ang) * atk.projectileSpeed, vy: Math.sin(ang) * atk.projectileSpeed,
+            dmg: player.dmg * atk.dmgMult, life: 2.2, color: atk.color, r: 5,
+          });
+          atk.cooldownTimer = atk.cooldown;
+        } else {
+          atk.cooldownTimer = 0.3; // nothing to target yet, retry soon
+        }
+      } else if (atk.type === 'nova') {
+        for (const e of enemies) {
+          if (Math.hypot(e.x - player.x, e.y - player.y) <= atk.radius + e.r) {
+            e.hp -= player.dmg * atk.dmgMult;
+            e.hitFlash = 0.1;
+          }
+        }
+        atk.novaFx = 0.3;
+        atk.cooldownTimer = atk.cooldown;
+      } else if (atk.type === 'chain') {
+        let source = { x: player.x, y: player.y };
+        const hit = [];
+        for (let i = 0; i <= atk.chainCount; i++) {
+          const target = findNearestEnemy(source.x, source.y, atk.chainRange, hit);
+          if (!target) break;
+          target.hp -= player.dmg * atk.dmgMult;
+          target.hitFlash = 0.1;
+          hit.push(target);
+          source = target;
+        }
+        if (hit.length) atk.chainFx = { points: hit.map(h => ({ x: h.x, y: h.y })), timer: 0.2 };
+        atk.cooldownTimer = atk.cooldown;
+      }
+    }
+    killDeadEnemies(1);
+  }
+
+  function updateProjectiles(dt) {
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const p = projectiles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+      let hit = false;
+      for (const e of enemies) {
+        if (Math.hypot(e.x - p.x, e.y - p.y) <= e.r + p.r) {
+          e.hp -= p.dmg;
+          e.hitFlash = 0.1;
+          hit = true;
+          break;
+        }
+      }
+      if (hit || p.life <= 0) projectiles.splice(i, 1);
+    }
+    killDeadEnemies(1);
   }
 
   function updateSpawning(dt) {
@@ -770,8 +994,11 @@
     if (gameState !== 'playing') return;
     elapsed += dt;
     updatePlayer(dt);
+    updateCamera(dt);
     updateEnemies(dt);
     updateGhosts(dt);
+    updateAutoAttacks(dt);
+    updateProjectiles(dt);
     updateCoins(dt);
     updateDifficultyTier(dt);
     updateSpawning(dt);
@@ -786,67 +1013,152 @@
   // DRAW
   // ============================================================
   function drawBackground() {
-    ctx.fillStyle = '#14151b';
+    ctx.fillStyle = '#171922';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+
+    // subtle checker tiles in world-space so the ground visibly scrolls
+    const tile = 40;
+    const originX = worldToScreen(0, 0).x, originY = worldToScreen(0, 0).y;
+    const startCol = Math.floor(-originX / tile) - 1;
+    const startRow = Math.floor(-originY / tile) - 1;
+    const cols = Math.ceil(CANVAS_W / tile) + 2;
+    const rows = Math.ceil(CANVAS_H / tile) + 2;
+    for (let row = startRow; row < startRow + rows; row++) {
+      for (let col = startCol; col < startCol + cols; col++) {
+        if (((row + col) & 1) === 0) continue;
+        ctx.fillStyle = 'rgba(120,110,190,0.05)';
+        ctx.fillRect(originX + col * tile, originY + row * tile, tile, tile);
+      }
+    }
+
+    // world decoration — scrolls with the camera, only draw what's visible
+    const margin = 24;
+    for (const d of decor) {
+      const s = worldToScreen(d.x, d.y);
+      if (s.x < -margin || s.x > CANVAS_W + margin || s.y < -margin || s.y > CANVAS_H + margin) continue;
+      drawSprite(DECOR_SPRITES[d.type], s.x, s.y, 15 * d.scale);
+    }
+
+    // grid lines on top, tinted for atmosphere
+    ctx.strokeStyle = 'rgba(150,140,220,0.06)';
     ctx.lineWidth = 1;
-    const step = 40;
-    for (let x = 0; x <= CANVAS_W; x += step) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+    for (let col = startCol; col < startCol + cols; col++) {
+      const sx = originX + col * tile;
+      ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, CANVAS_H); ctx.stroke();
     }
-    for (let y = 0; y <= CANVAS_H; y += step) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+    for (let row = startRow; row < startRow + rows; row++) {
+      const sy = originY + row * tile;
+      ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(CANVAS_W, sy); ctx.stroke();
     }
+
+    // world boundary wall, visible only when the camera nears an edge
+    const topLeft = worldToScreen(0, 0), botRight = worldToScreen(WORLD_W, WORLD_H);
+    ctx.strokeStyle = 'rgba(190,80,80,0.5)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(topLeft.x, topLeft.y, botRight.x - topLeft.x, botRight.y - topLeft.y);
+
+    // soft vignette for depth
+    const grad = ctx.createRadialGradient(CANVAS_W / 2, CANVAS_H / 2, CANVAS_H * 0.3, CANVAS_W / 2, CANVAS_H / 2, CANVAS_H * 0.8);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }
 
   function drawEnemy(e) {
+    const s = worldToScreen(e.x, e.y);
     const size = e.r * 2.6;
     if (e.hitFlash > 0) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      drawSprite(SPRITES[e.type], e.x, e.y, size);
+      drawSprite(SPRITES[e.type], s.x, s.y, size);
       ctx.restore();
     } else {
-      drawSprite(SPRITES[e.type], e.x, e.y, size);
+      drawSprite(SPRITES[e.type], s.x, s.y, size);
     }
     // hp bar
     const w = size;
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(e.x - w / 2, e.y - size / 2 - 6, w, 3);
+    ctx.fillRect(s.x - w / 2, s.y - size / 2 - 6, w, 3);
     ctx.fillStyle = '#c0453f';
-    ctx.fillRect(e.x - w / 2, e.y - size / 2 - 6, w * Math.max(0, e.hp / e.maxHp), 3);
+    ctx.fillRect(s.x - w / 2, s.y - size / 2 - 6, w * Math.max(0, e.hp / e.maxHp), 3);
   }
 
   function drawCoin(c) {
     const bob = Math.sin(elapsed * 4 + c.x) * 2;
-    drawSprite(SPRITES.coin, c.x, c.y + bob, 16);
+    const s = worldToScreen(c.x, c.y + bob);
+    drawSprite(SPRITES.coin, s.x, s.y, 16);
   }
 
   function drawGhost(g) {
-    drawSprite(g.sprite, g.x, g.y, 24, 0.88);
+    const s = worldToScreen(g.x, g.y);
+    drawSprite(g.sprite, s.x, s.y, 24, 0.88);
     if (g.attacking) {
       ctx.save();
       ctx.strokeStyle = 'rgba(230,190,90,0.5)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(g.x, g.y, g.atkRange, 0, Math.PI * 2);
+      ctx.arc(s.x, s.y, g.atkRange, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
   }
 
   function drawPlayer() {
+    const s = worldToScreen(player.x, player.y);
     if (player.attacking) {
       ctx.save();
       ctx.strokeStyle = 'rgba(120,190,255,0.6)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(player.x, player.y, player.atkRange, 0, Math.PI * 2);
+      ctx.arc(s.x, s.y, player.atkRange, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
     const flicker = player.invuln > 0 && Math.floor(elapsed * 20) % 2 === 0;
-    drawSprite(ALIVE_SPRITE, player.x, player.y, 26, flicker ? 0.4 : 1);
+    drawSprite(ALIVE_SPRITE, s.x, s.y, 26, flicker ? 0.4 : 1);
+  }
+
+  function drawAutoAttackFx() {
+    for (const atk of unlockedAttacks) {
+      if (atk.type === 'orbit') {
+        const bladeCount = 2, bladeR = 34;
+        for (let i = 0; i < bladeCount; i++) {
+          const ang = (atk.orbitAngle || 0) + i * (Math.PI * 2 / bladeCount);
+          const s = worldToScreen(player.x + Math.cos(ang) * bladeR, player.y + Math.sin(ang) * bladeR);
+          ctx.fillStyle = atk.color;
+          ctx.beginPath(); ctx.arc(s.x, s.y, 5, 0, Math.PI * 2); ctx.fill();
+        }
+      } else if (atk.type === 'nova' && atk.novaFx > 0) {
+        const s = worldToScreen(player.x, player.y);
+        const t = 1 - atk.novaFx / 0.3;
+        ctx.save();
+        ctx.globalAlpha = 1 - t;
+        ctx.strokeStyle = atk.color;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(s.x, s.y, atk.radius * t, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+      } else if (atk.type === 'chain' && atk.chainFx && atk.chainFx.timer > 0) {
+        const pts = [worldToScreen(player.x, player.y), ...atk.chainFx.points.map(p => worldToScreen(p.x, p.y))];
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, atk.chainFx.timer / 0.2);
+        ctx.strokeStyle = atk.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  function drawProjectiles() {
+    for (const p of projectiles) {
+      const s = worldToScreen(p.x, p.y);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(s.x, s.y, p.r, 0, Math.PI * 2); ctx.fill();
+    }
   }
 
   function drawBar(x, y, w, h, pct, fg, bg) {
@@ -867,7 +1179,7 @@
   function drawHud() {
     ctx.fillStyle = '#e8e8ec';
     ctx.font = '13px "Courier New", monospace';
-    ctx.fillText(`Life #${lifeNumber}   Lv ${player.level}   Ghosts: ${ghosts.length}   Tier ${difficultyTier}   Time: ${formatTime(elapsed)}`, 10, 18);
+    ctx.fillText(`Lives ${livesRemaining}/${maxLives}   Lv ${player.level}   Ghosts: ${ghosts.length}   Tier ${difficultyTier}   Time: ${formatTime(elapsed)}`, 10, 18);
 
     drawBar(10, 26, 160, 10, player.hp / player.maxHp, '#c0453f', 'rgba(0,0,0,0.5)');
     ctx.fillStyle = '#fff';
@@ -881,11 +1193,16 @@
     ctx.font = '13px monospace';
     ctx.fillText(`${save.gold}`, 34, 62);
 
+    const attackNames = ['Strike', ...unlockedAttacks.map(a => a.name)];
+    ctx.font = '10px monospace';
+    ctx.fillStyle = 'rgba(230,230,236,0.6)';
+    ctx.fillText(`Attacks (${attackNames.length}/${MAX_ATTACKS}): ${attackNames.join(', ')}`, 10, 74);
+
     ctx.font = '11px monospace';
     ctx.fillStyle = 'rgba(230,230,236,0.7)';
     ctx.fillText('WASD move  ·  J attack  ·  R menu', 10, CANVAS_H - 10);
 
-    let ty = 84;
+    let ty = 96;
     ctx.textAlign = 'center';
     for (const t of toasts) {
       ctx.globalAlpha = Math.min(1, t.timer);
@@ -903,6 +1220,8 @@
     for (const g of ghosts) drawGhost(g);
     for (const c of coins) drawCoin(c);
     for (const e of enemies) drawEnemy(e);
+    drawAutoAttackFx();
+    drawProjectiles();
     drawPlayer();
     drawHud();
   }
@@ -1045,10 +1364,36 @@
     ctx.textAlign = 'left';
   }
 
+  function gameOverButton() {
+    return { id: 'menu', label: 'Return to Menu', x: CANVAS_W / 2 - 110, y: 300, w: 220, h: 50 };
+  }
+
+  function drawGameOverScreen() {
+    drawPlayScreen(); // freeze-frame the battlefield behind the overlay
+
+    ctx.fillStyle = 'rgba(6,5,9,0.72)';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e0574d';
+    ctx.font = 'bold 40px "Courier New", monospace';
+    ctx.fillText('GAME OVER', CANVAS_W / 2, 160);
+
+    ctx.fillStyle = '#e8e8ec';
+    ctx.font = '14px monospace';
+    ctx.fillText(`Reached Level ${player.level}  ·  ${ghosts.length} echoes summoned`, CANVAS_W / 2, 200);
+    ctx.fillText(`Survived ${formatTime(elapsed)}  ·  ${save.gold} gold banked`, CANVAS_W / 2, 222);
+
+    const btn = gameOverButton();
+    drawButton(btn, pointInRect(mouseX, mouseY, btn), true);
+    ctx.textAlign = 'left';
+  }
+
   function draw() {
     if (gameState === 'title') drawTitleScreen();
     else if (gameState === 'menu') drawMenuScreen();
     else if (gameState === 'upgrades') drawUpgradesScreen();
+    else if (gameState === 'gameover') drawGameOverScreen();
     else drawPlayScreen();
   }
 

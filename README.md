@@ -29,10 +29,28 @@ return to the menu.
   or a ghost — so as echoes pile up across deaths, they pull swarm
   attention away from you and buy you room to survive the early tiers of
   each fresh life. Contact damage still only ever affects the real player.
+  Kills an echo lands still count for you, at half experience — killing
+  something yourself (melee or an unlocked auto-attack) is always full XP.
 - Each ghost's strength depends only on how many ghosts already exist
   (death order), not on the level you happened to reach that life — so early
   ghosts are weak and later ones carry hard. This is shown visually: ghosts
   are the player sprite recolored grey → gold as their power increases.
+- **Leveling grants attacks, not stats.** Your starting melee strike is
+  slot 1 of a 6-attack max; levels 2-6 each unlock one more, which then
+  fires itself on its own cooldown (no extra keybinds — same idea as
+  Vampire Survivors' auto-weapons). Re-reaching a level you already have
+  (common since level resets every death, unlike the attacks themselves)
+  just does nothing until you level past your prior best in that run.
+  The current 5 unlockable attacks (`ATTACK_DEFS` in the source) are
+  placeholders standing in for a real attack/animation list to come later.
+- **3 lives per run**, shown top-left. Losing all of them ends the run on
+  a Game Over screen. Buy more (the "Extra Life" Upgrade Shop entry, up to
+  9 total) — it's priced steeper than the other upgrades: double their
+  base cost, and its own cost doubles again with every purchase.
+- The world is bigger than the screen (2x in each dimension) and bounded,
+  with a camera that follows the player so the background visibly scrolls
+  as you move — kept modest on purpose so ghosts (which loop near wherever
+  each life started) stay within reach instead of getting left behind.
 - All sprites are procedurally generated at load time from math-defined
   masks + shading functions (see `buildSprite()` / `SPRITES` in the source),
   not hand-drawn pixel art.
@@ -45,9 +63,9 @@ return to the menu.
   the ground. Gold you've actually banked is permanent and saved to
   `localStorage`, independent of runs, deaths, or resets.
 - Spend gold in the Upgrades menu on permanent, run-independent boosts
-  (starting attack, starting max HP, movement speed %, experience gain %).
-  "Respec" fully refunds gold spent on upgrades so you can reallocate it —
-  it never destroys gold you've earned.
+  (starting attack, starting max HP, movement speed %, experience gain %,
+  extra lives). "Respec" fully refunds gold spent on upgrades so you can
+  reallocate it — it never destroys gold you've earned.
 
 ## Known next steps
 
@@ -55,3 +73,5 @@ return to the menu.
 - Responsive canvas sizing (currently a fixed 700x480).
 - Deciding whether ghosts should eventually cap or expire.
 - Expanding the upgrade list beyond the current starter set.
+- Swapping the 5 placeholder auto-attacks for the real attack/animation
+  list once it's ready.
