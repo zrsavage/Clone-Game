@@ -436,22 +436,29 @@
   // ============================================================
   // ATTACKS — everything fires itself automatically on a cooldown; the
   // player only ever moves. Strike is the innate starting attack (always
-  // owned, slot 1 of 6). Every level-up while a slot remains open pauses
-  // the game and offers a choice of unowned attacks (see gainXp / the
-  // 'levelup' game state) instead of auto-granting one. These 5 are
-  // placeholders standing in for a real attack/animation list — swap
-  // ATTACK_DEFS for it later, the choose-on-level-up flow and the 6-slot
-  // cap stay the same.
+  // owned, slot 1 of 6). Every level-up pauses the game and offers a
+  // choice of up to 4 candidates: pick up an unowned weapon (if a slot is
+  // free) or level up one you already have (up to WEAPON_MAX_LEVEL) — see
+  // gainXp / buildLevelUpCandidates / the 'levelup' game state. These 10
+  // (Strike + 9) are placeholders standing in for a real attack/animation
+  // list — swap ATTACK_DEFS for it later, the choice flow, weapon
+  // leveling, and the 6-slot cap stay the same.
   // ============================================================
   const STRIKE_DEF = { id: 'strike', name: 'Strike', desc: 'A quick pulsing slash around you.', type: 'nova', cooldown: 0.45, radius: 46, dmgMult: 1, color: '#7fc8ff' };
   const ATTACK_DEFS = [
     { id: 'echoBolt', name: 'Echo Bolt', desc: 'Fires a bolt at the nearest enemy.', type: 'projectile', cooldown: 1.1, range: 480, projectileSpeed: 260, dmgMult: 0.8, color: '#7fd1ff' },
     { id: 'shockPulse', name: 'Shock Pulse', desc: 'A wide ring blast that hits everything close by.', type: 'nova', cooldown: 2.6, radius: 70, dmgMult: 0.9, color: '#b98cff' },
-    { id: 'bladeOrbit', name: 'Blade Orbit', desc: 'Spectral blades orbit you, slicing anything they touch.', type: 'orbit', dmgMult: 0.35, color: '#ffe08a' },
+    { id: 'bladeOrbit', name: 'Blade Orbit', desc: 'Spectral blades orbit you, slicing anything they touch.', type: 'orbit', orbitRadius: 34, orbitSpeed: 3.2, dmgMult: 0.35, color: '#ffe08a' },
     { id: 'chainSpark', name: 'Chain Spark', desc: 'Arcs lightning between nearby enemies.', type: 'chain', cooldown: 2.0, chainRange: 100, chainCount: 2, dmgMult: 0.6, color: '#8affc1' },
     { id: 'meteorCall', name: 'Meteor Call', desc: 'A slow-charging blast with heavy damage.', type: 'nova', cooldown: 4.0, radius: 110, dmgMult: 1.8, color: '#ff8a5c' },
+    { id: 'piercingLance', name: 'Piercing Lance', desc: 'A lance that skewers through several enemies in a line.', type: 'projectile', cooldown: 1.6, range: 480, projectileSpeed: 300, dmgMult: 1.1, pierce: 3, color: '#bfe8ff' },
+    { id: 'twinFangs', name: 'Twin Fangs', desc: 'Fires two bolts at once in a narrow spread.', type: 'projectile', cooldown: 1.3, range: 420, projectileSpeed: 260, dmgMult: 0.55, count: 2, color: '#ff9fd6' },
+    { id: 'guardianRing', name: 'Guardian Ring', desc: 'A heavier orbiting ring — slower, but hits hard.', type: 'orbit', orbitRadius: 52, orbitSpeed: 2.0, dmgMult: 0.6, color: '#c9ff8a' },
+    { id: 'emberTrap', name: 'Ember Trap', desc: 'Drops a burning patch of ground that scorches anything standing in it.', type: 'trap', cooldown: 3.2, radius: 45, dmgMult: 0.5, tickInterval: 0.5, duration: 3.5, color: '#ff6a3d' },
+    { id: 'voidLance', name: 'Void Lance', desc: 'A slow, devastating bolt fired at the nearest enemy.', type: 'projectile', cooldown: 2.4, range: 500, projectileSpeed: 220, dmgMult: 2.2, color: '#c07fff' },
   ];
-  const MAX_ATTACKS = 6; // includes the starting Strike
+  const MAX_ATTACKS = 6;    // includes Strike — the hard cap on weapons owned at once
+  const WEAPON_MAX_LEVEL = 5;
 
   function pickRandomChoices(pool, n) {
     const copy = pool.slice();
@@ -460,6 +467,36 @@
       [copy[i], copy[j]] = [copy[j], copy[i]];
     }
     return copy.slice(0, n);
+  }
+
+  // Effective, level-scaled stats for a weapon instance. Levels never
+  // change what a weapon IS, just how hard/fast/far it works.
+  function attackPower(atk) {
+    const lvl = atk.level || 1;
+    const pw = { dmgMult: atk.dmgMult * (1 + (lvl - 1) * 0.25) };
+    if (atk.cooldown !== undefined) pw.cooldown = Math.max(atk.cooldown * (1 - (lvl - 1) * 0.08), atk.cooldown * 0.55);
+    if (atk.radius !== undefined) pw.radius = atk.radius * (1 + (lvl - 1) * 0.12);
+    if (atk.range !== undefined) pw.range = atk.range * (1 + (lvl - 1) * 0.1);
+    if (atk.chainCount !== undefined) pw.chainCount = atk.chainCount + Math.floor((lvl - 1) / 2);
+    if (atk.type === 'orbit') pw.bladeCount = 2 + Math.floor((lvl - 1) / 2);
+    return pw;
+  }
+
+  // Builds this level-up's menu: an unowned weapon (only while a slot is
+  // free) or a levelable one you already own. Empty once every slot is
+  // full of maxed weapons — leveling then just does nothing extra.
+  function buildLevelUpCandidates() {
+    const candidates = [];
+    const hasSlot = unlockedAttacks.length < MAX_ATTACKS;
+    for (const def of ATTACK_DEFS) {
+      const owned = unlockedAttacks.find(a => a.id === def.id);
+      if (owned) {
+        if (owned.level < WEAPON_MAX_LEVEL) candidates.push({ kind: 'upgrade', def, current: owned });
+      } else if (hasSlot) {
+        candidates.push({ kind: 'new', def });
+      }
+    }
+    return candidates;
   }
 
   // ============================================================
@@ -484,7 +521,7 @@
   function randomTierInterval() { return 15 + Math.random() * 15; }
 
   let player, enemies, ghosts, recording, toasts, coins, keys;
-  let unlockedAttacks, projectiles, decor;
+  let unlockedAttacks, projectiles, traps, decor;
   let maxLives = BASE_LIVES, livesRemaining = BASE_LIVES;
   const camera = { x: WORLD_W / 2, y: WORLD_H / 2 };
 
@@ -546,7 +583,8 @@
     toasts = [];
     coins = [];
     projectiles = [];
-    unlockedAttacks = [Object.assign({}, STRIKE_DEF, { cooldownTimer: 0 })];
+    traps = [];
+    unlockedAttacks = [Object.assign({}, STRIKE_DEF, { cooldownTimer: 0, level: 1 })];
     decor = generateDecor();
     spawnTimer = 0;
     addToast('A new loop begins.');
@@ -581,6 +619,7 @@
     enemies = [];        // fresh room for the new (weak) life
     coins = [];          // uncollected gold does not survive a death
     projectiles = [];
+    traps = [];
     lifeElapsed = 0;     // difficulty tier drops back to the start of the level...
     difficultyTier = 0;
     nextTierAt = randomTierInterval();
@@ -686,10 +725,10 @@
   // ============================================================
   function levelUpCardsList() {
     const n = pendingLevelChoices.length;
-    const cardW = 180, cardH = 220, gap = 24;
+    const cardW = 155, cardH = 212, gap = 15;
     const totalW = n * cardW + (n - 1) * gap;
     const startX = (CANVAS_W - totalW) / 2;
-    return pendingLevelChoices.map((def, i) => ({ def, x: startX + i * (cardW + gap), y: 150, w: cardW, h: cardH }));
+    return pendingLevelChoices.map((choice, i) => ({ choice, x: startX + i * (cardW + gap), y: 150, w: cardW, h: cardH }));
   }
 
   // ============================================================
@@ -731,11 +770,11 @@
       const cards = levelUpCardsList();
       if (k === 'arrowleft') levelUpSelection = (levelUpSelection - 1 + cards.length) % cards.length;
       if (k === 'arrowright') levelUpSelection = (levelUpSelection + 1) % cards.length;
-      if (k >= '1' && k <= '3') {
+      if (k >= '1' && k <= '4') {
         const idx = k.charCodeAt(0) - '1'.charCodeAt(0);
-        if (idx < cards.length) chooseLevelUpAttack(cards[idx].def);
+        if (idx < cards.length) resolveLevelUpChoice(cards[idx].choice);
       }
-      if (k === 'enter') chooseLevelUpAttack(cards[levelUpSelection].def);
+      if (k === 'enter') resolveLevelUpChoice(cards[levelUpSelection].choice);
       return;
     }
 
@@ -781,7 +820,7 @@
       return;
     }
     if (gameState === 'levelup') {
-      for (const c of levelUpCardsList()) if (pointInRect(p.x, p.y, c)) chooseLevelUpAttack(c.def);
+      for (const c of levelUpCardsList()) if (pointInRect(p.x, p.y, c)) resolveLevelUpChoice(c.choice);
       return;
     }
   });
@@ -829,14 +868,14 @@
     }
   }
 
-  // Leveling grants no stat boosts — only new unique attacks, up to
-  // MAX_ATTACKS total (Strike included). Attacks persist across deaths
-  // within a run since level resets to 1 each life but unlockedAttacks
-  // does not: re-reaching a level you already have room to spend just
-  // does nothing until you level past your prior best in that life.
-  // Every level-up with an open slot and an unowned attack left PAUSES
-  // the game (gameState 'levelup') and offers a choice, rather than
-  // auto-granting one.
+  // Leveling grants no stat boosts — only weapons, up to MAX_ATTACKS total
+  // (Strike included). Weapon levels persist across deaths within a run
+  // since player.level resets to 1 each life but unlockedAttacks does
+  // not: re-reaching a level you already spent just does nothing until
+  // you level past your prior best in that life. Every level-up with any
+  // candidate left (an unowned weapon, or an owned one below
+  // WEAPON_MAX_LEVEL) PAUSES the game (gameState 'levelup') and offers a
+  // choice, rather than auto-granting one.
   function gainXp(amount) {
     const expLv = save.upgrades.expGain || 0;
     player.xp += amount * (1 + expLv * 0.05);
@@ -844,21 +883,26 @@
       player.xp -= player.xpNext;
       player.level++;
       player.xpNext = 5 + player.level * 4;
-      const available = ATTACK_DEFS.filter(a => !unlockedAttacks.some(u => u.id === a.id));
-      if (unlockedAttacks.length < MAX_ATTACKS && available.length > 0) {
-        pendingLevelChoices = pickRandomChoices(available, Math.min(3, available.length));
+      const candidates = buildLevelUpCandidates();
+      if (candidates.length > 0) {
+        pendingLevelChoices = pickRandomChoices(candidates, Math.min(4, candidates.length));
         levelUpSelection = 0;
         gameState = 'levelup';
-        addToast('Level up! Choose your next attack.');
+        addToast('Level up! Choose a weapon or an upgrade.');
         break; // pause here; any leftover xp is re-checked next gainXp() call
       }
       addToast(`Level up! Lv ${player.level}`);
     }
   }
 
-  function chooseLevelUpAttack(def) {
-    unlockedAttacks.push(Object.assign({}, def, { cooldownTimer: 0, orbitAngle: 0 }));
-    addToast(`Unlocked ${def.name}!`);
+  function resolveLevelUpChoice(choice) {
+    if (choice.kind === 'new') {
+      unlockedAttacks.push(Object.assign({}, choice.def, { cooldownTimer: 0, orbitAngle: 0, level: 1 }));
+      addToast(`Unlocked ${choice.def.name}!`);
+    } else {
+      choice.current.level++;
+      addToast(`${choice.def.name} upgraded to Lv ${choice.current.level}!`);
+    }
     pendingLevelChoices = [];
     gameState = 'playing';
   }
@@ -958,17 +1002,18 @@
     for (const atk of unlockedAttacks) {
       if (atk.novaFx > 0) atk.novaFx -= dt;
       if (atk.chainFx) atk.chainFx.timer -= dt;
+      const pw = attackPower(atk);
 
       if (atk.type === 'orbit') {
-        atk.orbitAngle = (atk.orbitAngle || 0) + dt * 3.2;
-        const bladeCount = 2, bladeR = 34, hitR = 9;
+        atk.orbitAngle = (atk.orbitAngle || 0) + dt * atk.orbitSpeed;
+        const bladeCount = pw.bladeCount, bladeR = atk.orbitRadius, hitR = 9;
         for (let i = 0; i < bladeCount; i++) {
           const ang = atk.orbitAngle + i * (Math.PI * 2 / bladeCount);
           const bx = player.x + Math.cos(ang) * bladeR, by = player.y + Math.sin(ang) * bladeR;
           for (const e of enemies) {
             if (e.orbitHitCd > 0) continue;
             if (Math.hypot(e.x - bx, e.y - by) <= e.r + hitR) {
-              e.hp -= player.dmg * atk.dmgMult;
+              e.hp -= player.dmg * pw.dmgMult;
               e.hitFlash = 0.1;
               e.orbitHitCd = 0.35;
             }
@@ -981,41 +1026,54 @@
       if (atk.cooldownTimer > 0) continue;
 
       if (atk.type === 'projectile') {
-        const target = findNearestEnemy(player.x, player.y, atk.range);
+        const target = findNearestEnemy(player.x, player.y, pw.range);
         if (target) {
-          const ang = Math.atan2(target.y - player.y, target.x - player.x);
-          projectiles.push({
-            x: player.x, y: player.y,
-            vx: Math.cos(ang) * atk.projectileSpeed, vy: Math.sin(ang) * atk.projectileSpeed,
-            dmg: player.dmg * atk.dmgMult, life: 2.2, color: atk.color, r: 5,
-          });
-          atk.cooldownTimer = atk.cooldown;
+          const baseAng = Math.atan2(target.y - player.y, target.x - player.x);
+          const count = atk.count || 1;
+          const spread = 0.3;
+          for (let i = 0; i < count; i++) {
+            const off = count > 1 ? (i - (count - 1) / 2) * spread : 0;
+            const ang = baseAng + off;
+            projectiles.push({
+              x: player.x, y: player.y,
+              vx: Math.cos(ang) * atk.projectileSpeed, vy: Math.sin(ang) * atk.projectileSpeed,
+              dmg: player.dmg * pw.dmgMult, life: 2.2, color: atk.color, r: 5,
+              maxHits: atk.pierce || 1, hitList: [],
+            });
+          }
+          atk.cooldownTimer = pw.cooldown;
         } else {
           atk.cooldownTimer = 0.3; // nothing to target yet, retry soon
         }
       } else if (atk.type === 'nova') {
         for (const e of enemies) {
-          if (Math.hypot(e.x - player.x, e.y - player.y) <= atk.radius + e.r) {
-            e.hp -= player.dmg * atk.dmgMult;
+          if (Math.hypot(e.x - player.x, e.y - player.y) <= pw.radius + e.r) {
+            e.hp -= player.dmg * pw.dmgMult;
             e.hitFlash = 0.1;
           }
         }
         atk.novaFx = 0.3;
-        atk.cooldownTimer = atk.cooldown;
+        atk.cooldownTimer = pw.cooldown;
         if (atk.id === 'strike') player.attacking = true;
       } else if (atk.type === 'chain') {
         let source = { x: player.x, y: player.y };
         const hit = [];
-        for (let i = 0; i <= atk.chainCount; i++) {
+        for (let i = 0; i <= pw.chainCount; i++) {
           const target = findNearestEnemy(source.x, source.y, atk.chainRange, hit);
           if (!target) break;
-          target.hp -= player.dmg * atk.dmgMult;
+          target.hp -= player.dmg * pw.dmgMult;
           target.hitFlash = 0.1;
           hit.push(target);
           source = target;
         }
         if (hit.length) atk.chainFx = { points: hit.map(h => ({ x: h.x, y: h.y })), timer: 0.2 };
-        atk.cooldownTimer = atk.cooldown;
+        atk.cooldownTimer = pw.cooldown;
+      } else if (atk.type === 'trap') {
+        traps.push({
+          x: player.x, y: player.y, radius: pw.radius, color: atk.color,
+          dmg: player.dmg * pw.dmgMult, tickTimer: 0, tickInterval: atk.tickInterval, life: atk.duration,
+        });
+        atk.cooldownTimer = pw.cooldown;
       }
     }
     killDeadEnemies(1);
@@ -1025,16 +1083,34 @@
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
       p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
-      let hit = false;
+      let remove = p.life <= 0;
       for (const e of enemies) {
+        if (p.hitList.includes(e)) continue;
         if (Math.hypot(e.x - p.x, e.y - p.y) <= e.r + p.r) {
           e.hp -= p.dmg;
           e.hitFlash = 0.1;
-          hit = true;
+          p.hitList.push(e);
+          if (p.hitList.length >= p.maxHits) remove = true;
           break;
         }
       }
-      if (hit || p.life <= 0) projectiles.splice(i, 1);
+      if (remove) projectiles.splice(i, 1);
+    }
+    killDeadEnemies(1);
+  }
+
+  function updateTraps(dt) {
+    for (let i = traps.length - 1; i >= 0; i--) {
+      const t = traps[i];
+      t.life -= dt;
+      t.tickTimer -= dt;
+      if (t.tickTimer <= 0) {
+        t.tickTimer = t.tickInterval;
+        for (const e of enemies) {
+          if (Math.hypot(e.x - t.x, e.y - t.y) <= t.radius + e.r) { e.hp -= t.dmg; e.hitFlash = 0.1; }
+        }
+      }
+      if (t.life <= 0) traps.splice(i, 1);
     }
     killDeadEnemies(1);
   }
@@ -1075,6 +1151,7 @@
     // record this tick (after attacks resolve) for future ghost playback
     recording.push({ x: player.x, y: player.y, attacking: player.attacking });
     updateProjectiles(dt);
+    updateTraps(dt);
     updateCoins(dt);
     updateDifficultyTier(dt);
     updateSpawning(dt);
@@ -1189,8 +1266,9 @@
 
   function drawAutoAttackFx() {
     for (const atk of unlockedAttacks) {
+      const pw = attackPower(atk);
       if (atk.type === 'orbit') {
-        const bladeCount = 2, bladeR = 34;
+        const bladeCount = pw.bladeCount, bladeR = atk.orbitRadius;
         for (let i = 0; i < bladeCount; i++) {
           const ang = (atk.orbitAngle || 0) + i * (Math.PI * 2 / bladeCount);
           const s = worldToScreen(player.x + Math.cos(ang) * bladeR, player.y + Math.sin(ang) * bladeR);
@@ -1204,7 +1282,7 @@
         ctx.globalAlpha = 1 - t;
         ctx.strokeStyle = atk.color;
         ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.arc(s.x, s.y, atk.radius * t, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(s.x, s.y, pw.radius * t, 0, Math.PI * 2); ctx.stroke();
         ctx.restore();
       } else if (atk.type === 'chain' && atk.chainFx && atk.chainFx.timer > 0) {
         const pts = [worldToScreen(player.x, player.y), ...atk.chainFx.points.map(p => worldToScreen(p.x, p.y))];
@@ -1226,6 +1304,17 @@
       const s = worldToScreen(p.x, p.y);
       ctx.fillStyle = p.color;
       ctx.beginPath(); ctx.arc(s.x, s.y, p.r, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function drawTraps() {
+    for (const t of traps) {
+      const s = worldToScreen(t.x, t.y);
+      ctx.save();
+      ctx.globalAlpha = 0.3 + Math.sin(elapsed * 6) * 0.08;
+      ctx.fillStyle = t.color;
+      ctx.beginPath(); ctx.arc(s.x, s.y, t.radius, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
     }
   }
 
@@ -1261,7 +1350,7 @@
     ctx.font = '13px monospace';
     ctx.fillText(`${save.gold}`, 34, 62);
 
-    const attackNames = unlockedAttacks.map(a => a.name);
+    const attackNames = unlockedAttacks.map(a => `${a.name} Lv${a.level}`);
     ctx.font = '10px monospace';
     ctx.fillStyle = 'rgba(230,230,236,0.6)';
     ctx.fillText(`Attacks (${attackNames.length}/${MAX_ATTACKS}): ${attackNames.join(', ')}`, 10, 74);
@@ -1285,6 +1374,7 @@
 
   function drawPlayScreen() {
     drawBackground();
+    drawTraps();
     for (const g of ghosts) drawGhost(g);
     for (const c of coins) drawCoin(c);
     for (const e of enemies) drawEnemy(e);
@@ -1481,34 +1571,41 @@
     ctx.font = 'bold 26px "Courier New", monospace';
     ctx.fillText('LEVEL UP!', CANVAS_W / 2, 90);
     ctx.fillStyle = 'rgba(230,230,236,0.7)';
-    ctx.font = '13px monospace';
-    ctx.fillText('Choose a new attack', CANVAS_W / 2, 114);
+    ctx.font = '12px monospace';
+    ctx.fillText('Pick up a new weapon or upgrade one you have', CANVAS_W / 2, 114);
 
     const cards = levelUpCardsList();
     cards.forEach((c, i) => {
+      const { choice } = c;
+      const def = choice.def;
       const hovered = pointInRect(mouseX, mouseY, c);
       const active = hovered || i === levelUpSelection;
       ctx.fillStyle = active ? 'rgba(217,180,92,0.14)' : 'rgba(255,255,255,0.05)';
       ctx.fillRect(c.x, c.y, c.w, c.h);
-      ctx.strokeStyle = active ? c.def.color : '#4a4d5c';
+      ctx.strokeStyle = active ? def.color : '#4a4d5c';
       ctx.lineWidth = 2;
       ctx.strokeRect(c.x + 1, c.y + 1, c.w - 2, c.h - 2);
 
-      ctx.fillStyle = c.def.color;
-      ctx.beginPath(); ctx.arc(c.x + c.w / 2, c.y + 44, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = choice.kind === 'new' ? '#8affc1' : '#ffcf7a';
+      ctx.font = 'bold 10px monospace';
+      const badge = choice.kind === 'new' ? 'NEW WEAPON' : `UPGRADE Lv${choice.current.level}→${choice.current.level + 1}`;
+      ctx.fillText(badge, c.x + c.w / 2, c.y + 16);
+
+      ctx.fillStyle = def.color;
+      ctx.beginPath(); ctx.arc(c.x + c.w / 2, c.y + 48, 15, 0, Math.PI * 2); ctx.fill();
 
       ctx.fillStyle = '#e8e8ec';
-      ctx.font = 'bold 14px monospace';
-      ctx.fillText(c.def.name, c.x + c.w / 2, c.y + 84);
+      ctx.font = 'bold 13px monospace';
+      ctx.fillText(def.name, c.x + c.w / 2, c.y + 86);
 
       ctx.fillStyle = 'rgba(230,230,236,0.75)';
-      ctx.font = '11px monospace';
-      const lines = wrapText(c.def.desc, c.w - 24);
-      lines.forEach((line, li) => ctx.fillText(line, c.x + c.w / 2, c.y + 106 + li * 15));
+      ctx.font = '10px monospace';
+      const lines = wrapText(def.desc, c.w - 20);
+      lines.forEach((line, li) => ctx.fillText(line, c.x + c.w / 2, c.y + 106 + li * 14));
 
       ctx.fillStyle = 'rgba(230,230,236,0.5)';
       ctx.font = '10px monospace';
-      ctx.fillText(`[${i + 1}]`, c.x + c.w / 2, c.y + c.h - 14);
+      ctx.fillText(`[${i + 1}]`, c.x + c.w / 2, c.y + c.h - 12);
     });
     ctx.textAlign = 'left';
   }

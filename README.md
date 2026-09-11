@@ -36,24 +36,31 @@ own cooldown; there's nothing to press to attack.
   (death order), not on the level you happened to reach that life — so early
   ghosts are weak and later ones carry hard. This is shown visually: ghosts
   are the player sprite recolored grey → gold as their power increases.
-- **Leveling grants attacks, not stats — and you choose which one.** Your
-  starting Strike is slot 1 of a 6-attack max. Every level-up with an open
-  slot freezes the game and offers a choice of (usually 3) random attacks
-  you don't already have; picking one adds it to your kit, where it then
-  fires itself on cooldown forever (Vampire Survivors-style auto-weapons —
-  nothing to press). Re-reaching a level you already spent (common since
-  level resets every death, unlike your unlocked attacks) does nothing
-  until you level past your prior best in that run. The current 5
-  choosable attacks (`ATTACK_DEFS` in the source) are placeholders:
+- **Leveling grants weapons, not stats — and you choose.** Your starting
+  Strike is slot 1 of a 6-weapon max; every level-up freezes the game and
+  offers 4 choices, each either a weapon you don't own yet or a level-up
+  (up to Lv5) for one you already have — cards are tagged NEW WEAPON or
+  UPGRADE so it's clear which. Once all 6 slots are full, every choice is
+  an upgrade; once everything owned is also maxed, leveling just shows a
+  plain "Level up!" with nothing to pick. Weapons fire themselves on
+  cooldown (Vampire Survivors-style auto-weapons, nothing to press), and
+  each level makes the one you picked hit harder, faster, wider, or
+  further, depending on its type. Re-reaching a level you already spent
+  (common since player level resets every death, unlike your weapons)
+  does nothing until you level past your prior best in that run. The
+  pool has 10 weapons total (`ATTACK_DEFS` in the source, plus Strike) —
+  placeholders standing in for a real attack/animation list to come later,
+  the choose/upgrade flow and 6-slot cap won't need to change either way:
   - **Echo Bolt** — fires a bolt at the nearest enemy.
   - **Shock Pulse** — a wide ring blast around you, hits everything close.
   - **Blade Orbit** — spectral blades orbit you, damaging on contact.
   - **Chain Spark** — lightning arcs between nearby enemies.
   - **Meteor Call** — slow-charging, but hits hard.
-
-  These stand in for a real attack/animation list to come later — the
-  choose-on-level-up flow and the 6-slot cap won't need to change, just
-  the contents of `ATTACK_DEFS`.
+  - **Piercing Lance** — a lance that skewers through several enemies in a line.
+  - **Twin Fangs** — fires two bolts at once in a narrow spread.
+  - **Guardian Ring** — a heavier orbiting ring, slower but harder-hitting.
+  - **Ember Trap** — drops a burning patch of ground that scorches anything standing in it.
+  - **Void Lance** — a slow, devastating bolt at the nearest enemy.
 - **3 lives per run**, shown top-left. Losing all of them ends the run on
   a Game Over screen. Buy more (the "Extra Life" Upgrade Shop entry, up to
   9 total) — it's priced steeper than the other upgrades: double their
@@ -88,7 +95,7 @@ own cooldown; there's nothing to press to attack.
 - Responsive canvas sizing (currently a fixed 700x480).
 - Deciding whether ghosts should eventually cap or expire.
 - Expanding the upgrade list beyond the current starter set.
-- Swapping the 5 placeholder auto-attacks for the real attack/animation
-  list once it's ready.
+- Swapping the 10 placeholder weapons for the real attack/animation list
+  once it's ready.
 - Real image assets if/when genuinely realistic art is wanted — the
   procedural sprite system has a ceiling on how detailed it can look.
