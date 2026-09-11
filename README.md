@@ -19,9 +19,16 @@ return to the menu.
 ## How it works
 
 - You level up during a life by killing enemies (slimes → bats → brutes as
-  difficulty ramps).
-- Enemy HP scales with total elapsed survival time, uncapped by design — no
-  ghost army lets you out-scale it forever.
+  the threat tier climbs).
+- **Difficulty resets every death and ramps by numbers, not HP.** Each life
+  starts back at threat tier 0. Every 15-30 seconds the tier steps up,
+  spawning enemies faster and in bigger batches (never with more HP) — by
+  the later tiers of a long life the screen is meant to be nearly full of
+  mobs you have to out-maneuver with upgraded speed and attack range.
+- **Ghosts soak targeting.** Every enemy chases whichever is nearest, you
+  or a ghost — so as echoes pile up across deaths, they pull swarm
+  attention away from you and buy you room to survive the early tiers of
+  each fresh life. Contact damage still only ever affects the real player.
 - Each ghost's strength depends only on how many ghosts already exist
   (death order), not on the level you happened to reach that life — so early
   ghosts are weak and later ones carry hard. This is shown visually: ghosts

@@ -50,7 +50,7 @@
   const CANVAS_W = 700, CANVAS_H = 480;
   const SPRITE_SIZE = 15;
   const TICK = 1 / 60;
-  const MAX_ENEMIES = 150;
+  const MAX_ENEMIES = 220;
 
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
@@ -360,8 +360,18 @@
     brute: { hpMult: 2.2, speed: 40, dmg: 10, r: 12, xp: 9 },
   };
 
-  let elapsed = 0;          // global survival clock; never resets except full reset
+  let elapsed = 0;          // global run clock; only ghost looping & the HUD "Time" read this
   let lifeNumber = 1;
+
+  // Per-life difficulty: resets to zero every death. Difficulty ramps by
+  // spawning MORE enemies more often (a "threat tier" that steps up every
+  // 15-30s), never by inflating enemy HP — ghosts soak targeting early on,
+  // and by late tiers the screen should be nearly full of mobs to dodge.
+  let lifeElapsed = 0;
+  let difficultyTier = 0;
+  let nextTierAt = 20;
+  function randomTierInterval() { return 15 + Math.random() * 15; }
+
   let player, enemies, ghosts, recording, toasts, coins, keys, attackPressed;
 
   // 'title' -> 'menu' -> ('upgrades' | 'playing')
@@ -391,6 +401,9 @@
   function resetGame() {
     elapsed = 0;
     lifeNumber = 1;
+    lifeElapsed = 0;
+    difficultyTier = 0;
+    nextTierAt = randomTierInterval();
     player = freshPlayer();
     enemies = [];
     ghosts = [];
@@ -422,9 +435,12 @@
     }
     recording = [];
     lifeNumber++;
-    enemies = []; // fresh room for the new (weak) life; difficulty clock keeps climbing
-    coins = [];   // uncollected gold does not survive a death
-    player = freshPlayer();
+    enemies = [];        // fresh room for the new (weak) life
+    coins = [];          // uncollected gold does not survive a death
+    lifeElapsed = 0;     // difficulty tier drops back to the start of the level...
+    difficultyTier = 0;
+    nextTierAt = randomTierInterval();
+    player = freshPlayer(); // ...but the ghost army carried over keeps soaking targeting
   }
 
   function addToast(text) {
@@ -432,13 +448,17 @@
   }
 
   // ============================================================
-  // ENEMY SPAWNING — deliberately uncapped difficulty ramp
+  // ENEMY SPAWNING — difficulty ramps by NUMBERS, not enemy HP.
+  // Every 15-30s the current life's threat tier steps up, spawning
+  // enemies faster and in bigger batches until the screen is packed.
   // ============================================================
+  const BASE_ENEMY_HP = 22; // flat per type; tiers never inflate this
   let spawnTimer = 0;
-  function pickEnemyType() {
-    const wSlime = Math.max(0.08, 1 - elapsed / 120);
-    const wBat = elapsed > 12 ? Math.min(1, (elapsed - 12) / 50) : 0.03;
-    const wBrute = elapsed > 40 ? Math.min(1, (elapsed - 40) / 90) : 0.02;
+
+  function pickEnemyType(tier) {
+    const wSlime = Math.max(0.08, 1 - tier / 10);
+    const wBat = tier >= 2 ? Math.min(1, (tier - 2) / 8) : 0.03;
+    const wBrute = tier >= 6 ? Math.min(1, (tier - 6) / 10) : 0.02;
     const total = wSlime + wBat + wBrute;
     let r = Math.random() * total;
     if (r < wSlime) return 'slime';
@@ -447,12 +467,14 @@
     return 'brute';
   }
 
+  function spawnIntervalForTier(tier) { return Math.max(0.12, 1.6 * Math.pow(0.85, tier)); }
+  function spawnBatchForTier(tier) { return 1 + Math.floor(tier / 3); }
+
   function spawnEnemy() {
     if (enemies.length >= MAX_ENEMIES) return;
-    const type = pickEnemyType();
+    const type = pickEnemyType(difficultyTier);
     const stats = ENEMY_STATS[type];
-    const ramp = elapsed / 40; // <-- difficulty knob: no ceiling on purpose
-    const hp = (22 + ramp * 16) * stats.hpMult;
+    const hp = BASE_ENEMY_HP * stats.hpMult;
 
     let x, y;
     const edge = Math.floor(Math.random() * 4);
@@ -668,17 +690,32 @@
     recording.push({ x: player.x, y: player.y, attacking: player.attacking });
   }
 
+  // Enemies chase whichever is nearest, player or ghost — echoes standing
+  // between the player and the swarm soak targeting away from you. Contact
+  // damage still only ever applies to the real player.
+  function nearestTarget(e) {
+    let best = player;
+    let bestD = Math.hypot(player.x - e.x, player.y - e.y);
+    for (const g of ghosts) {
+      const d = Math.hypot(g.x - e.x, g.y - e.y);
+      if (d < bestD) { bestD = d; best = g; }
+    }
+    return best;
+  }
+
   function updateEnemies(dt) {
     for (const e of enemies) {
-      const ddx = player.x - e.x, ddy = player.y - e.y;
+      const target = nearestTarget(e);
+      const ddx = target.x - e.x, ddy = target.y - e.y;
       const d = Math.hypot(ddx, ddy) || 1;
       e.x += (ddx / d) * e.speed * dt;
       e.y += (ddy / d) * e.speed * dt;
       if (e.hitFlash > 0) e.hitFlash -= dt;
       if (e.hitCooldown > 0) e.hitCooldown -= dt;
 
+      const distToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
       const touchDist = e.r + player.r;
-      if (d <= touchDist && e.hitCooldown <= 0 && player.invuln <= 0) {
+      if (distToPlayer <= touchDist && e.hitCooldown <= 0 && player.invuln <= 0) {
         player.hp -= e.dmg;
         e.hitCooldown = 0.6;
         player.invuln = 0.3;
@@ -706,10 +743,19 @@
 
   function updateSpawning(dt) {
     spawnTimer -= dt;
-    const interval = Math.max(0.22, 1.6 - elapsed * 0.01);
     if (spawnTimer <= 0) {
-      spawnTimer = interval;
-      spawnEnemy();
+      spawnTimer = spawnIntervalForTier(difficultyTier);
+      const batch = spawnBatchForTier(difficultyTier);
+      for (let i = 0; i < batch; i++) spawnEnemy();
+    }
+  }
+
+  function updateDifficultyTier(dt) {
+    lifeElapsed += dt;
+    if (lifeElapsed >= nextTierAt) {
+      difficultyTier++;
+      nextTierAt += randomTierInterval();
+      addToast(`The threat grows... (tier ${difficultyTier})`);
     }
   }
 
@@ -727,6 +773,7 @@
     updateEnemies(dt);
     updateGhosts(dt);
     updateCoins(dt);
+    updateDifficultyTier(dt);
     updateSpawning(dt);
     updateToasts(dt);
 
@@ -820,7 +867,7 @@
   function drawHud() {
     ctx.fillStyle = '#e8e8ec';
     ctx.font = '13px "Courier New", monospace';
-    ctx.fillText(`Life #${lifeNumber}   Lv ${player.level}   Ghosts: ${ghosts.length}   Time: ${formatTime(elapsed)}`, 10, 18);
+    ctx.fillText(`Life #${lifeNumber}   Lv ${player.level}   Ghosts: ${ghosts.length}   Tier ${difficultyTier}   Time: ${formatTime(elapsed)}`, 10, 18);
 
     drawBar(10, 26, 160, 10, player.hp / player.maxHp, '#c0453f', 'rgba(0,0,0,0.5)');
     ctx.fillStyle = '#fff';
