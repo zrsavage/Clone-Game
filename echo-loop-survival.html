@@ -459,6 +459,7 @@
   ];
   const MAX_ATTACKS = 6;    // includes Strike — the hard cap on weapons owned at once
   const WEAPON_MAX_LEVEL = 5;
+  const ALL_WEAPON_DEFS = [STRIKE_DEF, ...ATTACK_DEFS]; // Strike is always owned, so it only ever shows up as an upgrade candidate below, never as "new"
 
   function pickRandomChoices(pool, n) {
     const copy = pool.slice();
@@ -483,12 +484,14 @@
   }
 
   // Builds this level-up's menu: an unowned weapon (only while a slot is
-  // free) or a levelable one you already own. Empty once every slot is
-  // full of maxed weapons — leveling then just does nothing extra.
+  // free) or a levelable one you already own — Strike included, so it
+  // isn't stuck at level 1 forever while everything else scales up.
+  // Empty once every slot is full of maxed weapons — leveling then just
+  // does nothing extra.
   function buildLevelUpCandidates() {
     const candidates = [];
     const hasSlot = unlockedAttacks.length < MAX_ATTACKS;
-    for (const def of ATTACK_DEFS) {
+    for (const def of ALL_WEAPON_DEFS) {
       const owned = unlockedAttacks.find(a => a.id === def.id);
       if (owned) {
         if (owned.level < WEAPON_MAX_LEVEL) candidates.push({ kind: 'upgrade', def, current: owned });
@@ -828,16 +831,15 @@
   // ============================================================
   // UPDATE
   // ============================================================
-  function doAttack(actorX, actorY, range, dmg, isPlayerAttack) {
+  // Ghosts' simple AoE pulse (the player's own attacks all run through
+  // updateAutoAttacks instead).
+  function ghostPulseAttack(actorX, actorY, range, dmg) {
     for (const e of enemies) {
       const d = Math.hypot(e.x - actorX, e.y - actorY);
       if (d <= range + e.r) {
         e.hp -= dmg;
         e.hitFlash = 0.08;
       }
-    }
-    if (isPlayerAttack) {
-      // resolve deaths immediately so xp/leveling feels responsive
     }
   }
 
@@ -876,9 +878,16 @@
   // candidate left (an unowned weapon, or an owned one below
   // WEAPON_MAX_LEVEL) PAUSES the game (gameState 'levelup') and offers a
   // choice, rather than auto-granting one.
+  //
+  // An AoE hit can kill several enemies in one tick, each calling this
+  // separately — bail out once already paused so a later kill in the same
+  // tick can't silently recompute and overwrite the choice screen before
+  // the player ever sees it. The xp still banks; it's picked up again on
+  // the next kill once play resumes.
   function gainXp(amount) {
     const expLv = save.upgrades.expGain || 0;
     player.xp += amount * (1 + expLv * 0.05);
+    if (gameState === 'levelup') return;
     while (player.xp >= player.xpNext) {
       player.xp -= player.xpNext;
       player.level++;
@@ -970,7 +979,7 @@
       g.x = frame.x; g.y = frame.y;
       // rising edge of the recorded attack flag re-triggers real damage
       if (frame.attacking && !g.frames[prevIdx].attacking) {
-        doAttack(g.x, g.y, g.atkRange, g.dmg, false);
+        ghostPulseAttack(g.x, g.y, g.atkRange, g.dmg);
       }
       g.attacking = frame.attacking;
     }
@@ -1146,6 +1155,15 @@
     updatePlayer(dt);
     updateCamera(dt);
     updateEnemies(dt);
+    // Contact damage in updateEnemies is the only way the player takes
+    // damage, so check for death right here — before any attack/kill
+    // processing below can pause the game for a level-up choice. Doing
+    // this later let a same-tick death silently clobber a just-opened
+    // level-up screen (or vice versa).
+    if (player.hp <= 0) {
+      nextLife();
+      return;
+    }
     updateGhosts(dt);
     updateAutoAttacks(dt);
     // record this tick (after attacks resolve) for future ghost playback
@@ -1156,10 +1174,6 @@
     updateDifficultyTier(dt);
     updateSpawning(dt);
     updateToasts(dt);
-
-    if (player.hp <= 0) {
-      nextLife();
-    }
   }
 
   // ============================================================
